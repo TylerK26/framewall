@@ -25,7 +25,9 @@ Built for the **Steam Frame**, with a KDE Plasma laptop or desktop as the host.
   resolution* raised to the wall's size, Moonlight draws the wall 1:1 instead
   of squeezing it into 1920×1080.
 - **Controller passthrough.** Launched from Steam, the headset's controllers
-  appear on the PC as an Xbox controller.
+  appear on the PC as an Xbox controller, and the laser pointer works as a mouse
+  that lines up with the desktop. Moonlight runs in its absolute ("remote
+  desktop") mouse mode; set `ABSOLUTE_MOUSE=0` for mouse-look games.
 
 ## How it works
 
@@ -131,7 +133,7 @@ Layouts:
 - `grid`: all screens in a near-square grid.
 
 Client (`~/.config/framewall.conf` on the headset): `HOST`, `APP`,
-`BITRATE_KBPS`.
+`BITRATE_KBPS`, `ABSOLUTE_MOUSE`.
 
 ## Tips
 
@@ -156,9 +158,6 @@ Client (`~/.config/framewall.conf` on the headset): `HOST`, `APP`,
 - KDE Plasma (KWin) only: the capture and the virtual monitors use KWin
   protocols.
 - Screens must use 100% scaling.
-- On the Steam Frame the laser pointer may not line up with the desktop when
-  Moonlight's screen is larger than gamescope's 1920×1080 output. The gamepad
-  works normally.
 - `krfb-virtualmonitor` also opens a VNC port per virtual monitor (5911,
   5912, …) protected by a random password; keep those ports closed in your
   firewall.

@@ -13,3 +13,7 @@ APP=""
 # a 3840x2280 wall). Higher keeps text cleaner while scrolling; 150000 works
 # well over the Steam Frame's 6 GHz adapter.
 BITRATE_KBPS=""
+
+# Mouse mode. 1 = the pointer's exact position is sent, so the laser lines up
+# with the desktop (default). 0 = relative movement, for mouse-look games.
+ABSOLUTE_MOUSE=1

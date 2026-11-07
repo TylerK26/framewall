@@ -26,6 +26,8 @@ HOST=""              # Moonlight host name, e.g. "mypc wall" (empty = first host
                      # whose name ends in " wall")
 APP=""               # wall preset; match its @RATE to the headset refresh rate
 BITRATE_KBPS=""      # empty = Moonlight's automatic choice for the resolution
+ABSOLUTE_MOUSE=1     # 1 = send the pointer's exact position (laser lines up with
+                     # the desktop); 0 = relative movement, as for mouse-look games
 MOONLIGHT=(flatpak run com.moonlight_stream.Moonlight)
 # ------------------------------------------------------------------------------
 CONF="$HOME/.config/framewall.conf"
@@ -69,6 +71,9 @@ else
 fi
 extra=()
 [[ -n "$BITRATE_KBPS" ]] && extra+=(--bitrate "$BITRATE_KBPS")
+# Moonlight's default mouse mode sends relative motion (for games), so the
+# desktop cursor drifts away from where the headset's laser points.
+if [[ "$ABSOLUTE_MOUSE" == 1 ]]; then extra+=(--absolute-mouse); else extra+=(--no-absolute-mouse); fi
 say "streaming \"$app\" from \"$host\" at ${width}x${height}@${fps}${BITRATE_KBPS:+, ${BITRATE_KBPS} kbps}"
 
 # --quit-after: closing the stream makes the host remove the virtual monitors.
