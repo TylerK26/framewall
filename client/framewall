@@ -68,14 +68,15 @@ extra=()
 [[ -n "$BITRATE_KBPS" ]] && extra+=(--bitrate "$BITRATE_KBPS")
 say "streaming \"$app\" from \"$host\" at ${width}x${height}@${fps}${BITRATE_KBPS:+, ${BITRATE_KBPS} kbps}"
 
-# Under gamescope (SteamOS game mode, including the Steam Frame) apps get a
+# Under gamescope (SteamOS game mode, including the Steam Frame; the process
+# is "gamescope-wl" there) apps get a
 # small X screen (1920x1080 on the Frame), so Moonlight would draw the wall at
 # that size. GAMESCOPE_XWAYLAND_MODE_CONTROL on Steam's root window (:0) sets
 # the app screen size: [xwayland server, w, h, allow larger than the output].
 # The server index is our X display number. Set it before Moonlight opens (it
 # sizes its window once) and again shortly after, in case Steam resets it for
 # the newly started game.
-if pgrep -x gamescope >/dev/null && [[ -n "${DISPLAY:-}" ]] && command -v xprop >/dev/null; then
+if pgrep -x "gamescope|gamescope-wl" >/dev/null && [[ -n "${DISPLAY:-}" ]] && command -v xprop >/dev/null; then
     server=${DISPLAY#:}; server=${server%%.*}
     set_mode() {
         DISPLAY=:0 xprop -root -f GAMESCOPE_XWAYLAND_MODE_CONTROL 32c \
