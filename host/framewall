@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# framewall (host): stream your physical screen plus N virtual monitors to a
+# framewall (host): stream your physical screens plus N virtual monitors to a
 # VR headset as ONE Moonlight stream, a "monitor wall".
 #
 # Runs on Linux with KDE Plasma 6 (Wayland). Virtual monitors come from
@@ -29,7 +29,8 @@ PORT=48389                               # Sunshine base port (uses PORT-5 .. PO
 SUNSHINE="$HOME/.local/opt/sunshine-wall/bin/sunshine"
 ENCODER=vaapi                            # vaapi | nvenc | vulkan | software
 ADAPTER=""                               # e.g. /dev/dri/renderD128 (empty = Sunshine's choice)
-PHYSICAL=auto                            # screen to include: auto | <output name> | none
+PHYSICAL=all                             # physical screens in the wall: all | primary |
+                                         # "NAME NAME..." | none
 PRESETS=(                                # "COUNT WIDTHxHEIGHT REFRESH LAYOUT"
     "2 1920x1080 120 top"
     "2 1920x1080 90 top"
@@ -43,71 +44,138 @@ die() { echo "framewall: $*" >&2; exit 1; }
 
 kscreen_json() { kscreen-doctor -j 2>/dev/null; }
 
-# Physical screen: "name width height scale" (empty if PHYSICAL=none).
-physical_screen() {
-    [[ "$PHYSICAL" == none ]] && return 0
-    kscreen_json | python3 -c '
-import json, sys
-want = sys.argv[1]
-outs = [o for o in json.load(sys.stdin)["outputs"]
-        if o["enabled"] and o["connected"] and not o["name"].startswith("Virtual-")]
-if want != "auto":
-    outs = [o for o in outs if o["name"] == want]
-outs.sort(key=lambda o: o.get("priority") or 99)
-if outs:
-    o = outs[0]
-    size = next(m["size"] for m in o["modes"] if m["id"] == o["currentModeId"])
-    print(o["name"], size["width"], size["height"], o.get("scale", 1))
-' "$PHYSICAL"
-}
-
-# Lay out one preset. Prints "wall_w wall_h" then one line per screen:
-# "name x y" (physical screen first, if any).
-layout() {
-    local n=$1 w=$2 h=$3 shape=$4 pname=${5:-} pw=${6:-0} ph=${7:-0}
-    python3 - "$n" "$w" "$h" "$shape" "$pname" "$pw" "$ph" <<'PY'
-import math, sys
+# Plan a preset from KWin's current screens (kscreen-doctor -j on stdin).
+#   plan COUNT W H LAYOUT
+# Prints:
+#   WALL w h              wall size (= stream size)
+#   REGION x y w h        rectangle Sunshine captures
+#   POS name x y          where each screen of the wall goes
+#   SAVE name x y         original position of every other screen (restored by down)
+#   WARN text
+# Physical screens in the wall keep their arrangement (as one block); the
+# virtual monitors Virtual-wall1..N are added around that block. Screens left
+# out stay put, and the wall is placed to their right.
+plan() {
+    # The program itself arrives on python's stdin, so the screens go by env.
+    FRAMEWALL_SCREENS="$(cat)" python3 - "$1" "$2" "$3" "$4" "$PHYSICAL" "${FRAMEWALL_EXTRA_PHYSICAL:-}" <<'PY'
+import json, math, os, sys
 n, w, h = int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3])
-shape, pname = sys.argv[4], sys.argv[5]
-pw, ph = int(sys.argv[6]), int(sys.argv[7])
-v = [f"Virtual-wall{i}" for i in range(1, n + 1)]
-place = {}
-if shape == "top":            # virtual row on top, physical centred below
+shape, spec, extra = sys.argv[4], sys.argv[5].split(), sys.argv[6].split()
+# KWin leaves "enabled" out for virtual outputs: treat missing as true.
+outs = [o for o in json.loads(os.environ["FRAMEWALL_SCREENS"])["outputs"]
+        if o.get("enabled", True) and o.get("connected", True)]
+
+def is_physical(o):  # FRAMEWALL_EXTRA_PHYSICAL: test hook to treat outputs as physical
+    return not o["name"].startswith("Virtual-") or o["name"] in extra
+
+def geom(o):
+    size = next(m["size"] for m in o["modes"] if m["id"] == o["currentModeId"])
+    sw, sh = size["width"], size["height"]
+    if o.get("rotation") in (2, 8):          # rotated left/right
+        sw, sh = sh, sw
+    scale = o.get("scale", 1) or 1
+    return o["pos"]["x"], o["pos"]["y"], round(sw / scale), round(sh / scale), scale
+
+phys = [o for o in outs if is_physical(o)]
+if spec in ([], ["all"]):
+    inc = phys
+elif spec in (["primary"], ["auto"]):
+    inc = sorted(phys, key=lambda o: o.get("priority") or 99)[:1]
+elif spec == ["none"]:
+    inc = []
+else:
+    names = {o["name"] for o in outs}
+    for s in spec:
+        if s not in names:
+            print(f"WARN screen {s} not found (enabled outputs: {' '.join(sorted(names))})")
+    inc = [o for o in outs if o["name"] in spec]
+inc_names = {o["name"] for o in inc}
+excluded = [o for o in outs if o["name"] not in inc_names and not o["name"].startswith("Virtual-wall")]
+
+# Block of included physical screens, in their current arrangement.
+block = {}
+for o in inc:
+    x, y, sw, sh, scale = geom(o)
+    if scale != 1:
+        print(f"WARN {o['name']} uses {round(scale * 100)}% scaling; the wall assumes 100%")
+    block[o["name"]] = (x, y, sw, sh)
+if block:
+    bx0 = min(v[0] for v in block.values()); by0 = min(v[1] for v in block.values())
+    bw = max(v[0] + v[2] for v in block.values()) - bx0
+    bh = max(v[1] + v[3] for v in block.values()) - by0
+else:
+    bx0 = by0 = bw = bh = 0
+
+virt = [f"Virtual-wall{i}" for i in range(1, n + 1)]
+pos = {}          # name -> (x, y) relative to the wall's top-left
+bpos = (0, 0)     # block's top-left relative to the wall
+if shape == "top" or (shape == "grid" and n <= 1):
     row = n * w
-    W = max(row, pw)
-    for i, name in enumerate(v):
-        place[name] = ((W - row) // 2 + i * w, 0)
-    if pname:
-        place[pname] = ((W - pw) // 2, h)
-    H = h + ph
-elif shape == "row":          # physical in the middle, virtual split left/right
+    W = max(row, bw)
+    for i, v in enumerate(virt):
+        pos[v] = ((W - row) // 2 + i * w, 0)
+    bpos = ((W - bw) // 2, h if n else 0)
+    H = (h if n else 0) + bh
+elif shape == "row":
     left = n // 2
-    H = max(h, ph)
+    H = max(h if n else 0, bh)
     x = 0
-    for name in v[:left]:
-        place[name] = (x, (H - h) // 2); x += w
-    if pname:
-        place[pname] = (x, (H - ph) // 2); x += pw
-    for name in v[left:]:
-        place[name] = (x, (H - h) // 2); x += w
+    for v in virt[:left]:
+        pos[v] = (x, (H - h) // 2); x += w
+    bpos = (x, (H - bh) // 2); x += bw
+    for v in virt[left:]:
+        pos[v] = (x, (H - h) // 2); x += w
     W = x
-elif shape == "grid":         # everything in a near-square grid of equal cells
-    cells = ([pname] if pname else []) + v
-    cw, ch = max(w, pw), max(h, ph)
-    cols = round(math.sqrt(len(cells) * ch / cw * 16 / 9))
-    cols = max(1, min(cols, len(cells)))
-    for i, name in enumerate(cells):
-        sw, sh = (pw, ph) if name == pname else (w, h)
-        place[name] = ((i % cols) * cw + (cw - sw) // 2, (i // cols) * ch + (ch - sh) // 2)
-    W, H = cols * cw, math.ceil(len(cells) / cols) * ch
+elif shape == "grid":
+    # Virtual monitors in rows above the block; pick the column count that
+    # makes the whole wall closest to 16:9.
+    best = None
+    for cols in range(1, n + 1):
+        gw, gh = cols * w, math.ceil(n / cols) * h
+        W_, H_ = max(gw, bw), gh + bh
+        score = abs(W_ / H_ - 16 / 9)
+        if best is None or score < best[0]:
+            best = (score, cols, gw, gh, W_, H_)
+    _, cols, gw, gh, W, H = best
+    for i, v in enumerate(virt):
+        pos[v] = ((W - gw) // 2 + (i % cols) * w, (i // cols) * h)
+    bpos = ((W - bw) // 2, gh)
 else:
     sys.exit(f"unknown layout '{shape}' (top, row, grid)")
-print(W, H)
-if pname:
-    print(pname, *place[pname])
-for name in v:
-    print(name, *place[name])
+
+# Place the wall to the right of any screens left out of it.
+ox = max((geom(o)[0] + geom(o)[2] for o in excluded), default=0)
+oy = 0
+print("WALL", W, H)
+print("REGION", ox, oy, W, H)
+for name, (x, y, sw, sh) in block.items():
+    nx, ny = ox + bpos[0] + (x - bx0), oy + bpos[1] + (y - by0)
+    print("POS", name, nx, ny)
+    print("SAVE", name, x, y)
+# KWin may also nudge screens left out of the wall; put those back too.
+for o in excluded:
+    print("SAVE", o["name"], o["pos"]["x"], o["pos"]["y"])
+for v in virt:
+    print("POS", v, ox + pos[v][0], oy + pos[v][1])
 PY
+}
+
+# Actual bounding box of the given outputs, read back from KWin: "x y w h".
+bbox_of() {
+    kscreen_json | python3 -c '
+import json, sys
+want = set(sys.argv[1:])
+g = []
+for o in json.load(sys.stdin)["outputs"]:
+    if o["name"] in want and o.get("enabled", True):
+        s = next(m["size"] for m in o["modes"] if m["id"] == o["currentModeId"])
+        sw, sh = (s["height"], s["width"]) if o.get("rotation") in (2, 8) else (s["width"], s["height"])
+        sc = o.get("scale", 1) or 1
+        g.append((o["pos"]["x"], o["pos"]["y"], round(sw / sc), round(sh / sc)))
+if g:
+    x0, y0 = min(a[0] for a in g), min(a[1] for a in g)
+    print(x0, y0, max(a[0] + a[2] for a in g) - x0, max(a[1] + a[3] for a in g) - y0)
+' "$@"
 }
 
 # Moonlight app name for a preset; the client reads the stream size and
@@ -145,14 +213,12 @@ wait_for_output() {
 }
 
 cmd_apps() {
-    local pinfo pname="" pw=0 ph=0 pscale=1
-    pinfo=$(physical_screen)
-    [[ -n "$pinfo" ]] && read -r pname pw ph pscale <<< "$pinfo"
-    local p count w h hz shape size
+    local json p count w h hz shape W H
+    json=$(kscreen_json)
     for p in "${PRESETS[@]}"; do
         read -r count w h hz shape <<< "$(preset_fields "$p")"
-        size=$(layout "$count" "$w" "$h" "$shape" "$pname" "$pw" "$ph" | head -1)
-        app_name "$count" "${w}x$h" "$hz" "$shape" ${size}
+        read -r _ W H < <(plan "$count" "$w" "$h" "$shape" <<< "$json" | grep '^WALL')
+        app_name "$count" "${w}x$h" "$hz" "$shape" "$W" "$H"
     done
 }
 
@@ -162,12 +228,12 @@ cmd_up() {
     local count w h hz shape
     read -r count w h hz shape <<< "$(preset_fields "$preset")"
     cmd_down
-    local pinfo pname="" pw=0 ph=0 pscale=1
-    pinfo=$(physical_screen)
-    [[ -n "$pinfo" ]] && read -r pname pw ph pscale <<< "$pinfo"
-    if [[ -n "$pname" && "$pscale" != 1 && "$pscale" != 1.0 ]]; then
-        echo "framewall: warning: $pname uses scale $pscale; the wall assumes 100% scaling" >&2
-    fi
+    mkdir -p "$SUNSHINE_DIR"
+    # Snapshot the arrangement BEFORE adding virtual monitors: when they appear,
+    # KWin may restore a layout it remembers for that set of screens, which
+    # would move the physical screens before we look.
+    local screens
+    screens=$(kscreen_json)
 
     local i
     for i in $(seq 1 "$count"); do
@@ -181,24 +247,43 @@ cmd_up() {
         fi
     done
 
+    local planout
+    planout=$(plan "$count" "$w" "$h" "$shape" <<< "$screens")
+    { grep '^WARN ' <<< "$planout" || true; } | sed 's/^WARN /framewall: warning: /' >&2
+    # Every screen's original position, put back by `down`.
+    { grep '^SAVE ' <<< "$planout" || true; } | cut -d' ' -f2- > "$SUNSHINE_DIR/saved-layout"
+
     # Position everything in ONE call: KWin reshuffles screens moved one at a
     # time, and Sunshine maps the mouse using the positions at capture start.
-    local args=() size name x y first=1
-    while read -r name x y; do
-        if (( first )); then size="$name ${x}"; first=0; continue; fi
+    local args=() names=() tag name x y
+    while read -r tag name x y; do
+        [[ "$tag" == POS ]] || continue
+        names+=("$name")
         args+=("output.$name.position.$x,$y")
         [[ "$name" == Virtual-wall* && "$hz" != 60 ]] && args+=("output.$name.mode.${w}x${h}@$hz")
-    done < <(layout "$count" "$w" "$h" "$shape" "$pname" "$pw" "$ph")
+    done <<< "$planout"
+    (( ${#args[@]} )) || { cmd_down; die "nothing to show: no virtual monitors and no physical screens selected"; }
     kscreen-doctor "${args[@]}" >/dev/null 2>&1 || true
     sleep 1
-    echo "framewall: ${count}x ${w}x${h}@${hz} ($shape) -> stream ${size/ /x}"
+
+    # Tell Sunshine exactly what to capture (read back: KWin has the final say
+    # on positions).
+    local region
+    region=$(bbox_of "${names[@]}")
+    echo "$region" > "$SUNSHINE_DIR/region"
+    read -r _ _ W H <<< "$region"
+    echo "framewall: ${count}x ${w}x${h}@${hz} ($shape) + ${#names[@]} screens -> stream ${W}x${H} (region $region)"
 }
 
 cmd_down() {
     systemctl --user stop 'framewall-vmon*.service' 2>/dev/null || true
-    local pinfo pname
-    pinfo=$(physical_screen)
-    [[ -n "$pinfo" ]] && { read -r pname _ <<< "$pinfo"; kscreen-doctor "output.$pname.position.0,0" >/dev/null 2>&1 || true; }
+    rm -f "$SUNSHINE_DIR/region"
+    if [[ -s "$SUNSHINE_DIR/saved-layout" ]]; then
+        local args=() name x y
+        while read -r name x y; do args+=("output.$name.position.$x,$y"); done < "$SUNSHINE_DIR/saved-layout"
+        kscreen-doctor "${args[@]}" >/dev/null 2>&1 || true
+    fi
+    rm -f "$SUNSHINE_DIR/saved-layout"
     return 0
 }
 
@@ -224,7 +309,7 @@ cmd_install() {
             sep=$',\n'
             i=$((i + 1))
         done
-        printf '%s        { "name": "Physical screen only", "image-path": "desktop.png" }\n' "$sep"
+        printf '%s        { "name": "Physical screens only", "image-path": "desktop.png" }\n' "$sep"
         echo '    ]'
         echo '}'
     } > "$SUNSHINE_DIR/apps.json"
@@ -253,6 +338,7 @@ PartOf=graphical-session.target
 After=graphical-session.target
 
 [Service]
+Environment=SUNSHINE_KWIN_WORKSPACE_REGION_FILE=$SUNSHINE_DIR/region
 ExecStart=$SUNSHINE $SUNSHINE_DIR/sunshine.conf
 ExecStopPost=$SELF down
 Restart=on-failure

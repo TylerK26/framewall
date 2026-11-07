@@ -1,7 +1,7 @@
 # framewall
 
 Stream your Linux desktop to a VR headset as a **monitor wall**: your real
-screen plus any number of **virtual monitors**, captured together as **one**
+screens plus any number of **virtual monitors**, captured together as **one**
 Moonlight stream and shown in the headset's theater/cinema screen.
 
 Built for the **Steam Frame**, with a KDE Plasma laptop or desktop as the host.
@@ -22,11 +22,15 @@ Built for the **Steam Frame**, with a KDE Plasma laptop or desktop as the host.
 ## How it works
 
 - **Host** (`host/framewall`): creates KWin virtual monitors with
-  `krfb-virtualmonitor`, lays them out around your physical screen, and runs a
-  dedicated Sunshine instance. Sunshine needs a small patch
+  `krfb-virtualmonitor`, lays them out around your physical screens (which keep
+  their arrangement, and get it back afterwards), and runs a dedicated Sunshine
+  instance. Sunshine needs a small patch
   (`sunshine/0001-kwingrab-workspace-capture.patch`). It adds
-  `output_name = workspace`, which captures the bounding box of all screens
-  through KWin's `stream_region` instead of a single monitor.
+  `output_name = workspace`, which captures a region spanning several screens
+  through KWin's `stream_region` instead of a single monitor. The region is the
+  wall's exact rectangle, which framewall writes to a file named by
+  `SUNSHINE_KWIN_WORKSPACE_REGION_FILE`. Without that file it falls back to the
+  bounding box of all screens.
 - **Client** (`client/framewall`): runs Moonlight on the headset with the
   right resolution and frame rate, read from the preset's app name.
 
@@ -38,7 +42,7 @@ Built for the **Steam Frame**, with a KDE Plasma laptop or desktop as the host.
 - A hardware encoder Sunshine supports (tested: Intel Arc iGPU via VAAPI)
 - The patched Sunshine, built with `sunshine/build.sh` (installs to
   `~/.local/opt/sunshine-wall`; your regular Sunshine package stays as is)
-- The screen you include must use **100% scaling**
+- The physical screens you include must use **100% scaling**
 
 **Client**
 - Steam Frame (SteamOS), with the **Moonlight** flatpak
@@ -109,18 +113,25 @@ Host (`~/.config/framewall/config`, see `host/config.example`):
 | Setting | Meaning |
 |---|---|
 | `PRESETS` | One line per wall: `"COUNT WIDTHxHEIGHT REFRESH LAYOUT"`, e.g. `"2 1920x1080 108 top"` |
-| `PHYSICAL` | Screen to include: `auto` (primary), an output name, or `none` |
+| `PHYSICAL` | Physical screens in the wall: `all` (default), `primary`, a list of output names, or `none`. Screens left out keep working where they are. |
 | `ENCODER` / `ADAPTER` | Sunshine encoder (`vaapi`, `nvenc`, …) and GPU render node |
 | `PORT` | Sunshine base port (separate from a normal Sunshine on 47989) |
 | `NAME` | Host name shown in Moonlight |
 
-Layouts:
-- `top`: virtual monitors in a row, physical screen centred below. With two
-  1080p monitors over a 16:10 laptop the wall is close to 16:9, so it **fills a
+Layouts (the physical screens move as one block, keeping their arrangement):
+- `top`: virtual monitors in a row above the physical screens. With two 1080p
+  monitors over a 16:10 laptop the wall is close to 16:9, so it **fills a
   theater screen**.
-- `row`: physical screen in the middle, virtual monitors left and right. Wide,
+- `row`: physical screens in the middle, virtual monitors left and right. Wide,
   so it's letterboxed on a 16:9 screen.
-- `grid`: all screens in a near-square grid.
+- `grid`: virtual monitors in rows above the physical screens, with the column
+  count that makes the wall closest to 16:9.
+
+**Multiple monitors.** All physical screens are included by default, in the
+arrangement you have, with the virtual monitors added around them; your
+arrangement is restored when the stream ends. Set `PHYSICAL` to include only
+some of them: the others keep working where they are, and the wall is placed
+to their right. Multi-monitor layouts are tested with simulated screens only.
 
 Client (`~/.config/framewall.conf` on the headset): `HOST`, `APP`,
 `BITRATE_KBPS`, `ABSOLUTE_MOUSE`.

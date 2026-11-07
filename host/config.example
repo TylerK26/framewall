@@ -20,24 +20,29 @@ SUNSHINE="$HOME/.local/opt/sunshine-wall/bin/sunshine"
 ENCODER=vaapi
 ADAPTER=/dev/dri/renderD128
 
-# Which physical screen to include in the wall:
-#   auto        - the primary screen
-#   <name>      - a specific output, e.g. eDP-1 or DP-2 (see `kscreen-doctor -o`)
-#   none        - virtual monitors only
-# The included screen must use 100% scaling.
-PHYSICAL=auto
+# Physical screens in the wall. They keep their current arrangement (as one
+# block) and the virtual monitors are added around it.
+#   all            - every physical screen (default)
+#   primary        - just the primary screen
+#   "DP-1 DP-2"    - these outputs (names from `kscreen-doctor -o`)
+#   none           - virtual monitors only
+# Screens left out keep working where they are; the wall is placed to their
+# right. (A left-out screen in the middle of the included ones leaves a gap.)
+# Screens in the wall must use 100% scaling.
+PHYSICAL=all
 
 # Wall presets, one Moonlight app each:  "COUNT WIDTHxHEIGHT REFRESH LAYOUT"
 #   COUNT    number of virtual monitors
 #   REFRESH  virtual monitor refresh rate AND stream fps. Match your headset's
 #            refresh rate (e.g. 90, 108, 120): a stream faster than the headset
 #            wastes GPU time and can make head movement stutter.
-#   LAYOUT   top  - virtual monitors in a row, physical screen centred below
-#                   (2x 1080p over a 1920x1200 laptop = 3840x2280, close to
-#                   16:9, so it fills a theater/cinema screen)
-#            row  - physical screen in the middle, virtual monitors left/right
-#                   (wide; letterboxed on a 16:9 theater screen)
-#            grid - all screens in a near-square grid of equal cells
+#   LAYOUT   top  - virtual monitors in a row above the physical screens
+#                   (e.g. 2x 1080p over a 1920x1200 laptop = 3840x2280, close
+#                   to 16:9, so it fills a theater/cinema screen)
+#            row  - physical screens in the middle, virtual monitors split
+#                   left/right (wide; letterboxed on a 16:9 theater screen)
+#            grid - virtual monitors in rows above the physical screens, with
+#                   the column count that makes the wall closest to 16:9
 PRESETS=(
     "2 1920x1080 120 top"
     "2 1920x1080 108 top"

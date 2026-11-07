@@ -1,14 +1,16 @@
-From db525f1ade7b5a25ebc9b64e8efe4f70e78339be Mon Sep 17 00:00:00 2001
+From 964c0e0ff465e52e9540614f811445c134e81a80 Mon Sep 17 00:00:00 2001
 From: Tyler Kindell <tylerkindell08@gmail.com>
-Date: Fri, 6 Nov 2026 21:56:38 -0800
-Subject: [PATCH] kwingrab: add 'workspace' output (all outputs as one stream
- via stream_region)
+Date: Sat, 7 Nov 2026 14:33:38 -0800
+Subject: [PATCH] kwingrab: add 'workspace' output (all outputs, or a region
+ file, as one stream)
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+output_name = workspace captures the bounding box of all outputs via KWin's
+stream_region. If SUNSHINE_KWIN_WORKSPACE_REGION_FILE names a file holding
+"x y width height", that region is captured instead.
 ---
  cmake/dependencies/Boost_Sunshine.cmake |  2 +-
- src/platform/linux/kwingrab.cpp         | 51 ++++++++++++++++++++++---
- 2 files changed, 47 insertions(+), 6 deletions(-)
+ src/platform/linux/kwingrab.cpp         | 65 +++++++++++++++++++++++--
+ 2 files changed, 61 insertions(+), 6 deletions(-)
 
 diff --git a/cmake/dependencies/Boost_Sunshine.cmake b/cmake/dependencies/Boost_Sunshine.cmake
 index f0ff9a78..52973810 100644
@@ -24,7 +26,7 @@ index f0ff9a78..52973810 100644
      message(STATUS "Boost v${BOOST_VERSION} package not found in the system. Falling back to FetchContent.")
      include(FetchContent)
 diff --git a/src/platform/linux/kwingrab.cpp b/src/platform/linux/kwingrab.cpp
-index 93431871..2c9fc5da 100644
+index 93431871..e1b2d003 100644
 --- a/src/platform/linux/kwingrab.cpp
 +++ b/src/platform/linux/kwingrab.cpp
 @@ -9,6 +9,7 @@
@@ -54,7 +56,7 @@ index 93431871..2c9fc5da 100644
        return output_names;
      }
  
-@@ -399,7 +405,39 @@ namespace kwin {
+@@ -399,7 +405,53 @@ namespace kwin {
          return -1;
        }
        struct wl_output *output = nullptr;
@@ -74,6 +76,20 @@ index 93431871..2c9fc5da 100644
 +          min_y = std::min(min_y, params_->pos_y);
 +          max_x = std::max(max_x, params_->pos_x + params_->width);
 +          max_y = std::max(max_y, params_->pos_y + params_->height);
++        }
++        // Optional exact region ("x y width height", logical coordinates) from the
++        // file named by SUNSHINE_KWIN_WORKSPACE_REGION_FILE, e.g. written by an
++        // app's prep command to capture only some of the screens.
++        if (const char *region_file = std::getenv("SUNSHINE_KWIN_WORKSPACE_REGION_FILE"); region_file && *region_file) {
++          std::ifstream region(region_file);
++          int rx, ry, rw, rh;
++          if (region >> rx >> ry >> rw >> rh && rw > 0 && rh > 0) {
++            min_x = rx;
++            min_y = ry;
++            max_x = rx + rw;
++            max_y = ry + rh;
++            BOOST_LOG(info) << "[kwingrab] workspace region from "sv << region_file << ": "sv << rw << 'x' << rh << '+' << rx << '+' << ry;
++          }
 +        }
 +        if (min_x == INT_MAX) {
 +          BOOST_LOG(error) << "[kwingrab] workspace capture: no outputs with known geometry"sv;
@@ -95,7 +111,7 @@ index 93431871..2c9fc5da 100644
          for (auto const &[output_, params_] : outputs) {
            if (params_->name == output_name) {
              output = output_;
-@@ -408,14 +446,16 @@ namespace kwin {
+@@ -408,14 +460,16 @@ namespace kwin {
          }
        }
        // Fall back to first element from the map in case of error
@@ -114,7 +130,7 @@ index 93431871..2c9fc5da 100644
          kde_screencast_stream_v1_ = zkde_screencast_unstable_v1_stream_output(kde_screencast_v1_, output, ZKDE_SCREENCAST_UNSTABLE_V1_POINTER_EMBEDDED);
          zkde_screencast_stream_unstable_v1_add_listener(kde_screencast_stream_v1_, &stream_listener, this);
        } else {
-@@ -701,8 +741,9 @@ namespace kwin {
+@@ -701,8 +755,9 @@ namespace kwin {
          this->offset_y = screencast->out_params->pos_y;
          this->width = screencast->out_params->width;
          this->height = screencast->out_params->height;
