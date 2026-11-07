@@ -6,16 +6,6 @@ Moonlight stream and shown in the headset's theater/cinema screen.
 
 Built for the **Steam Frame**, with a KDE Plasma laptop or desktop as the host.
 
-```
- ┌──────────────┬──────────────┐
- │  virtual 1   │  virtual 2   │     2 × 1920×1080 virtual monitors
- │  1920×1080   │  1920×1080   │   + the laptop's 1920×1200 screen
- └──────┬───────┴───────┬──────┘   = one 3840×2280 stream
-        │    laptop     │
-        │   1920×1200   │
-        └───────────────┘
-```
-
 - **One Sunshine, one Moonlight.** No juggling a stream per monitor.
 - **Virtual monitors on demand.** They exist only while you're connected and
   are removed when you close the stream. Count, resolution, refresh rate and
