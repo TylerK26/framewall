@@ -70,7 +70,7 @@ cd framewall
 mkdir -p ~/.local/bin ~/.config/framewall
 install -m 755 host/framewall ~/.local/bin/framewall
 cp host/config.example ~/.config/framewall/config
-$EDITOR "~/.config/framewall/config"   # presets, encoder, GPU, port
+$EDITOR ~/.config/framewall/config   # presets, encoder, GPU, port
 framewall install
 ```
 
