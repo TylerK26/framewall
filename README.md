@@ -68,7 +68,7 @@ cd framewall
 mkdir -p ~/.local/bin ~/.config/framewall
 install -m 755 host/framewall ~/.local/bin/framewall
 cp host/config.example ~/.config/framewall/config
-$EDITOR ~/.config/framewall/config     # presets, encoder, GPU, port
+Open the config file at "~/.config/framewall/config" to edit your preferred settings     # presets, encoder, GPU, port
 framewall install
 ```
 
@@ -89,11 +89,11 @@ It runs as a systemd user service (`framewall.service`) from login. Run
    `flatpak install flathub com.moonlight_stream.Moonlight`).
 2. In Moonlight, add the host by IP and port, e.g. `192.168.1.20:48389`, and
    pair it. Enter the PIN at `https://localhost:48390` on the PC.
+   I recommend using the ip given by the 6ghz wireless dongle for the lowest latency
 3. Copy `client/framewall` to the headset, e.g. `~/framewall`, and make it
    executable. Optionally copy `client/framewall.conf.example` to
    `~/.config/framewall.conf` to pick a default preset and bitrate.
-4. In Steam: **Add a Non-Steam Game** → browse to `~/framewall` → add it, and
-   set its controller layout to **Gamepad**.
+4. In deskop mode, go to ~/framewall, right click framewall (Click thumbstick), and click "Add to Steam"
 
 5. In Steam's settings, set **Maximum game resolution** to the smallest option
    that is at least as large as the wall: **3840×2400** for a 3840×2280 wall.
