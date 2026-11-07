@@ -21,9 +21,9 @@ Built for the **Steam Frame**, with a KDE Plasma laptop or desktop as the host.
   are removed when you close the stream. Count, resolution, refresh rate and
   layout are set in one config file, and each preset shows up as an app in
   Moonlight.
-- **Full resolution on the Steam Frame.** The client lifts gamescope's
-  1920×1080 limit for the Moonlight window, so a 3840×2280 wall isn't squeezed
-  down before it reaches the headset.
+- **Full resolution on the Steam Frame.** With Steam's *Maximum game
+  resolution* raised to the wall's size, Moonlight draws the wall 1:1 instead
+  of squeezing it into 1920×1080.
 - **Controller passthrough.** Launched from Steam, the headset's controllers
   appear on the PC as an Xbox controller.
 
@@ -36,9 +36,7 @@ Built for the **Steam Frame**, with a KDE Plasma laptop or desktop as the host.
   `output_name = workspace`, which captures the bounding box of all screens
   through KWin's `stream_region` instead of a single monitor.
 - **Client** (`client/framewall`): runs Moonlight on the headset with the
-  right resolution and frame rate, read from the preset's app name. Under
-  gamescope it sets `GAMESCOPE_XWAYLAND_MODE_CONTROL` so Moonlight gets a
-  screen as large as the wall.
+  right resolution and frame rate, read from the preset's app name.
 
 ## Requirements
 
@@ -101,6 +99,13 @@ It runs as a systemd user service (`framewall.service`) from login. Run
 4. In Steam: **Add a Non-Steam Game** → browse to `~/framewall` → add it, and
    set its controller layout to **Gamepad**.
 
+5. In Steam's settings, set **Maximum game resolution** to the smallest option
+   that is at least as large as the wall: **3840×2400** for a 3840×2280 wall.
+   `framewall install` prints the size to pick for each preset. Steam's default
+   (1920×1080) makes Moonlight shrink the wall to half size, and a much larger
+   option (e.g. 5120×2880) costs the headset GPU extra work, which can make head
+   movement stutter.
+
 Launch it from Steam. To switch presets, set `APP` in
 `~/.config/framewall.conf` (`~/framewall --list` shows the names), or give
 the app name as a launch option.
@@ -130,6 +135,9 @@ Client (`~/.config/framewall.conf` on the headset): `HOST`, `APP`,
 
 ## Tips
 
+- **Steam's Maximum game resolution:** pick the smallest option that fits the
+  wall (see Setup). Too small scales the wall down; much larger costs headset
+  GPU time.
 - **Match the refresh rate to the headset.** If a preset's rate is higher than
   the headset's, the headset GPU decodes frames it never shows, and head
   movement can stutter. On the Steam Frame, 108 Hz with a 108 Hz preset was the
@@ -148,9 +156,9 @@ Client (`~/.config/framewall.conf` on the headset): `HOST`, `APP`,
 - KDE Plasma (KWin) only: the capture and the virtual monitors use KWin
   protocols.
 - Screens must use 100% scaling.
-- On the Steam Frame the laser pointer doesn't line up with the desktop on the
-  enlarged Moonlight screen (gamescope maps it using its normal 1920×1080).
-  The gamepad works normally.
+- On the Steam Frame the laser pointer may not line up with the desktop when
+  Moonlight's screen is larger than gamescope's 1920×1080 output. The gamepad
+  works normally.
 - `krfb-virtualmonitor` also opens a VNC port per virtual monitor (5911,
   5912, …) protected by a random password; keep those ports closed in your
   firewall.

@@ -116,6 +116,16 @@ app_name() {   # count res hz shape W H
     echo "Wall ${1}x${2}@${3} ${4} (${5}x${6})"
 }
 
+# Smallest common Steam "Maximum game resolution" that fits a WxH wall, so the
+# headset's Moonlight shows it 1:1 (bigger options cost headset GPU time).
+steam_fit() {
+    local W=$1 H=$2 r
+    for r in 1920x1080 1920x1200 2560x1440 2560x1600 3840x2160 3840x2400 5120x2880; do
+        (( ${r%x*} >= W && ${r#*x} >= H )) && { echo "$r"; return; }
+    done
+    echo "none fits (wider/taller than 5120x2880; Moonlight scales the wall down)"
+}
+
 preset_fields() {   # preset string -> "count w h hz shape"
     local count res hz shape
     read -r count res hz shape <<< "$1"
@@ -257,8 +267,12 @@ UNIT
     echo "framewall: Sunshine \"$NAME\" running on port $PORT"
     echo "  pair from Moonlight, then enter the PIN at https://localhost:$((PORT + 1))"
     echo "  firewall: allow TCP $((PORT - 5)),$PORT,$((PORT + 1)),$((PORT + 21)) and UDP $((PORT + 9))-$((PORT + 11)),$((PORT + 13))"
-    echo "  apps:"
-    cmd_apps | sed 's/^/    /'
+    echo "  apps (and the Steam \"Maximum game resolution\" to pick on the headset):"
+    local a
+    while IFS= read -r a; do
+        [[ "$a" =~ \(([0-9]+)x([0-9]+)\)$ ]] && a="$a  ->  Steam: $(steam_fit "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}")"
+        echo "    $a"
+    done < <(cmd_apps)
 }
 
 cmd_uninstall() {
