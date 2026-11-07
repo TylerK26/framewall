@@ -1,3 +1,5 @@
+# DISCLAIMER: This whole repository is vibecoded, and while I have some programming experience, I did not review everything that claude wrote, proceed with caution and I am not responsible for any damages caused to your computer or your headset.
+
 # framewall
 
 Stream your Linux desktop to a VR headset as a **monitor wall**: your real
