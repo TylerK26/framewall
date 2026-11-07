@@ -63,7 +63,7 @@ A fast link matters: the Steam Frame's 6 GHz wireless adapter works well.
 ### 1. Host: build the patched Sunshine
 
 ```sh
-git clone https://github.com/<you>/framewall.git
+git clone https://github.com/TylerK26/framewall.git
 cd framewall
 ./sunshine/build.sh          # add --cuda for NVENC (needs the CUDA toolkit)
 ```
