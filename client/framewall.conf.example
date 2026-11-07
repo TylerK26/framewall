@@ -1,0 +1,15 @@
+# framewall client config: copy to ~/.config/framewall.conf on the headset.
+
+# Moonlight host name of the framewall host (its NAME setting). Leave empty
+# to use the first paired host whose name ends in " wall".
+HOST=""
+
+# Wall preset to open by default: an app name exactly as the host lists it
+# (`framewall --list`). Pick the one whose @RATE matches your headset's
+# refresh rate. Empty = the first wall preset the host offers.
+APP=""
+
+# Stream bitrate in kbps. Empty = Moonlight's automatic choice (~100 Mbps for
+# a 3840x2280 wall). Higher keeps text cleaner while scrolling; 150000 works
+# well over the Steam Frame's 6 GHz adapter.
+BITRATE_KBPS=""

@@ -1,0 +1,131 @@
+From db525f1ade7b5a25ebc9b64e8efe4f70e78339be Mon Sep 17 00:00:00 2001
+From: Tyler Kindell <tylerkindell08@gmail.com>
+Date: Fri, 6 Nov 2026 21:56:38 -0800
+Subject: [PATCH] kwingrab: add 'workspace' output (all outputs as one stream
+ via stream_region)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ cmake/dependencies/Boost_Sunshine.cmake |  2 +-
+ src/platform/linux/kwingrab.cpp         | 51 ++++++++++++++++++++++---
+ 2 files changed, 47 insertions(+), 6 deletions(-)
+
+diff --git a/cmake/dependencies/Boost_Sunshine.cmake b/cmake/dependencies/Boost_Sunshine.cmake
+index f0ff9a78..52973810 100644
+--- a/cmake/dependencies/Boost_Sunshine.cmake
++++ b/cmake/dependencies/Boost_Sunshine.cmake
+@@ -33,7 +33,7 @@ endif()
+ if (CMAKE_VERSION VERSION_GREATER_EQUAL "3.30")
+     cmake_policy(SET CMP0167 NEW)  # Get BoostConfig.cmake from upstream
+ endif()
+-find_package(Boost CONFIG ${BOOST_VERSION} EXACT COMPONENTS ${BOOST_COMPONENTS})
++find_package(Boost CONFIG ${BOOST_VERSION} COMPONENTS ${BOOST_COMPONENTS})
+ if(NOT Boost_FOUND)
+     message(STATUS "Boost v${BOOST_VERSION} package not found in the system. Falling back to FetchContent.")
+     include(FetchContent)
+diff --git a/src/platform/linux/kwingrab.cpp b/src/platform/linux/kwingrab.cpp
+index 93431871..2c9fc5da 100644
+--- a/src/platform/linux/kwingrab.cpp
++++ b/src/platform/linux/kwingrab.cpp
+@@ -9,6 +9,7 @@
+  */
+ // standard includes
+ #include <algorithm>
++#include <climits>
+ #include <array>
+ #include <atomic>
+ #include <chrono>
+@@ -269,6 +270,7 @@ namespace kwin {
+    */
+   class screencast_t {
+   public:
++    static constexpr std::string_view workspace_output_name = "workspace"sv;  ///< sunshine-wall: all outputs as one region
+     screencast_t &operator=(screencast_t &&) = delete;  // Do not allow to copying
+ 
+     ~screencast_t() {
+@@ -371,6 +373,10 @@ namespace kwin {
+         BOOST_LOG(info) << "[kwingrab] Found output: "sv << output_parameter->name << " order: "sv << output_parameter->order << " position: "sv << output_parameter->pos_x << "x"sv << output_parameter->pos_y << " resolution: "sv << output_parameter->width << "x"sv << output_parameter->height;
+         output_names.emplace_back(output_parameter->name);
+       }
++      // sunshine-wall: the bounding box of all outputs as one stream (stream_region, protocol v3+)
++      if (kde_screencast_v1_ && wl_proxy_get_version(reinterpret_cast<struct wl_proxy *>(kde_screencast_v1_)) >= 3 && !output_names.empty()) {
++        output_names.emplace_back(workspace_output_name);
++      }
+       return output_names;
+     }
+ 
+@@ -399,7 +405,39 @@ namespace kwin {
+         return -1;
+       }
+       struct wl_output *output = nullptr;
+-      if (!output_name.empty()) {
++      const bool workspace = output_name == workspace_output_name;
++      if (workspace) {
++        if (!kde_screencast_v1_ || wl_proxy_get_version(reinterpret_cast<struct wl_proxy *>(kde_screencast_v1_)) < 3) {
++          BOOST_LOG(error) << "[kwingrab] workspace capture needs zkde_screencast_unstable_v1 version 3 (stream_region)"sv;
++          return -1;
++        }
++        int min_x = INT_MAX, min_y = INT_MAX, max_x = INT_MIN, max_y = INT_MIN;
++        for (const auto &params_ : outputs | std::views::values) {
++          if (params_->width <= 0 || params_->height <= 0) {
++            continue;
++          }
++          min_x = std::min(min_x, params_->pos_x);
++          min_y = std::min(min_y, params_->pos_y);
++          max_x = std::max(max_x, params_->pos_x + params_->width);
++          max_y = std::max(max_y, params_->pos_y + params_->height);
++        }
++        if (min_x == INT_MAX) {
++          BOOST_LOG(error) << "[kwingrab] workspace capture: no outputs with known geometry"sv;
++          return -1;
++        }
++        // Assumes scale 1 on every output (logical size == mode size).
++        out_params = std::make_shared<output_parameter_t>();
++        out_params->name = std::string(workspace_output_name);
++        out_params->pos_x = min_x;
++        out_params->pos_y = min_y;
++        out_params->width = max_x - min_x;
++        out_params->height = max_y - min_y;
++        kde_screencast_stream_v1_ = zkde_screencast_unstable_v1_stream_region(
++          kde_screencast_v1_, min_x, min_y, out_params->width, out_params->height,
++          wl_fixed_from_int(1), ZKDE_SCREENCAST_UNSTABLE_V1_POINTER_EMBEDDED
++        );
++        zkde_screencast_stream_unstable_v1_add_listener(kde_screencast_stream_v1_, &stream_listener, this);
++      } else if (!output_name.empty()) {
+         for (auto const &[output_, params_] : outputs) {
+           if (params_->name == output_name) {
+             output = output_;
+@@ -408,14 +446,16 @@ namespace kwin {
+         }
+       }
+       // Fall back to first element from the map in case of error
+-      if (!output || !out_params) {
++      if (!workspace && (!output || !out_params)) {
+         const auto output_ = outputs.begin();
+         output = output_->first;
+         out_params = output_->second;
+       }
+ 
+       // Request a stream for the chosen output with embedded cursor
+-      if (kde_screencast_v1_) {
++      if (workspace) {
++        // already requested above
++      } else if (kde_screencast_v1_) {
+         kde_screencast_stream_v1_ = zkde_screencast_unstable_v1_stream_output(kde_screencast_v1_, output, ZKDE_SCREENCAST_UNSTABLE_V1_POINTER_EMBEDDED);
+         zkde_screencast_stream_unstable_v1_add_listener(kde_screencast_stream_v1_, &stream_listener, this);
+       } else {
+@@ -701,8 +741,9 @@ namespace kwin {
+         this->offset_y = screencast->out_params->pos_y;
+         this->width = screencast->out_params->width;
+         this->height = screencast->out_params->height;
+-        this->logical_width = 0;  // Explicitly mark for pipewire_display_t to try to figure this out.
+-        this->logical_height = 0;  // Explicitly Mark for pipewire_display_t to try to figure this out.
++        const bool workspace = screencast->out_params->name == screencast_t::workspace_output_name;
++        this->logical_width = workspace ? this->width : 0;  // 0: let pipewire_display_t figure it out
++        this->logical_height = workspace ? this->height : 0;
+         return 0;
+       }
+       return -1;
+-- 
+2.56.0
+

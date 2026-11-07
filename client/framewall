@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# framewall (client): open the monitor wall from a framewall host in Moonlight.
+#
+# Made for the Steam Frame (SteamOS); should work on other SteamOS/gamescope
+# devices and plain Linux with the Moonlight flatpak.
+#
+#   framewall            stream APP from ~/.config/framewall.conf (or the
+#                         first wall preset the host offers)
+#   framewall "APP"      stream a specific app (exact Moonlight app name)
+#   framewall --list     list the host's apps
+#
+# Add it to Steam as a non-Steam game and give it a Gamepad controller layout:
+# Steam only gives controller input to apps it launched.
+#
+# The host encodes the stream size and refresh rate in the app name, e.g.
+# "Wall 2x1920x1080@108 top (3840x2280)", so the only thing to set here is
+# which preset to use.
+#
+# Copyright (C) 2026 framewall contributors. GPL-3.0-or-later.
+
+# ---- defaults (override in ~/.config/framewall.conf) -------------------------
+HOST=""              # Moonlight host name, e.g. "mypc wall" (empty = first host
+                     # whose name ends in " wall")
+APP=""               # wall preset; match its @RATE to the headset refresh rate
+BITRATE_KBPS=""      # empty = Moonlight's automatic choice for the resolution
+MOONLIGHT=(flatpak run com.moonlight_stream.Moonlight)
+# ------------------------------------------------------------------------------
+CONF="$HOME/.config/framewall.conf"
+[[ -r "$CONF" ]] && . "$CONF"
+
+log="$HOME/.cache/framewall.log"
+mkdir -p "$HOME/.cache"
+say() { echo "$(date '+%F %T') $*" | tee -a "$log" >&2; }
+
+moonlight_cli() {   # headless Moonlight CLI calls (list)
+    QT_QPA_PLATFORM=offscreen "${MOONLIGHT[@]}" "$@" 2>/dev/null |
+        grep -vE '^[0-9]{2}:[0-9]{2}:[0-9]{2} - |locale|UTF-8|^If this causes|^for more information'
+}
+
+find_host() {
+    [[ -n "$HOST" ]] && { echo "$HOST"; return; }
+    # Moonlight keeps known hosts in its config file.
+    local cfg="$HOME/.var/app/com.moonlight_stream.Moonlight/config/Moonlight Game Streaming Project/Moonlight.conf"
+    [[ -r "$cfg" ]] || cfg="$HOME/.config/Moonlight Game Streaming Project/Moonlight.conf"
+    grep -oE '^hosts\\[0-9]+\\hostname=.* wall$' "$cfg" 2>/dev/null | head -1 | sed 's/^[^=]*=//'
+}
+
+host=$(find_host)
+[[ -n "$host" ]] || { say "no framewall host known: pair it in Moonlight first, or set HOST in $CONF"; exit 1; }
+
+if [[ "${1:-}" == --list ]]; then
+    moonlight_cli list "$host"
+    exit
+fi
+
+app=${1:-$APP}
+if [[ -z "$app" ]]; then
+    app=$(moonlight_cli list "$host" | grep -m1 -E '^Wall .*@[0-9]+.*\([0-9]+x[0-9]+\)$')
+    [[ -n "$app" ]] || { say "host \"$host\" offers no wall presets (is it reachable and paired?)"; exit 1; }
+fi
+if [[ "$app" =~ @([0-9]+).*\(([0-9]+)x([0-9]+)\)$ ]]; then
+    fps=${BASH_REMATCH[1]} width=${BASH_REMATCH[2]} height=${BASH_REMATCH[3]}
+else
+    say "can't read the stream size from \"$app\" (expected \"... @RATE ... (WxH)\")"
+    exit 1
+fi
+extra=()
+[[ -n "$BITRATE_KBPS" ]] && extra+=(--bitrate "$BITRATE_KBPS")
+say "streaming \"$app\" from \"$host\" at ${width}x${height}@${fps}${BITRATE_KBPS:+, ${BITRATE_KBPS} kbps}"
+
+# Under gamescope (SteamOS game mode, including the Steam Frame) apps get a
+# small X screen (1920x1080 on the Frame), so Moonlight would draw the wall at
+# that size. GAMESCOPE_XWAYLAND_MODE_CONTROL on Steam's root window (:0) sets
+# the app screen size: [xwayland server, w, h, allow larger than the output].
+# The server index is our X display number. Set it before Moonlight opens (it
+# sizes its window once) and again shortly after, in case Steam resets it for
+# the newly started game.
+if pgrep -x gamescope >/dev/null && [[ -n "${DISPLAY:-}" ]] && command -v xprop >/dev/null; then
+    server=${DISPLAY#:}; server=${server%%.*}
+    set_mode() {
+        DISPLAY=:0 xprop -root -f GAMESCOPE_XWAYLAND_MODE_CONTROL 32c \
+            -set GAMESCOPE_XWAYLAND_MODE_CONTROL "$server,$width,$height,1" 2>> "$log"
+    }
+    set_mode; sleep 0.5
+    ( sleep 2; set_mode; sleep 3; set_mode ) &
+fi
+
+# --quit-after: closing the stream makes the host remove the virtual monitors.
+exec "${MOONLIGHT[@]}" stream "$host" "$app" --resolution "${width}x${height}" \
+    --fps "$fps" "${extra[@]}" --quit-after --background-gamepad

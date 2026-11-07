@@ -1,0 +1,52 @@
+# framewall host config: copy to ~/.config/framewall/config and edit.
+# After changing anything, run `framewall install` again (pairing is kept).
+
+# How this PC shows up in Moonlight.
+NAME="$(hostname -s) wall"
+
+# Sunshine base port. framewall's Sunshine is separate from any normal
+# Sunshine you run (default 47989), so pick a port range that doesn't clash.
+# Firewall: TCP PORT-5, PORT, PORT+1 (web UI), PORT+21; UDP PORT+9..PORT+11, PORT+13.
+PORT=48389
+
+# Patched Sunshine (built by sunshine/build.sh).
+SUNSHINE="$HOME/.local/opt/sunshine-wall/bin/sunshine"
+
+# Video encoder and GPU.
+#   vaapi  - Intel/AMD (set ADAPTER to the GPU's render node)
+#   nvenc  - NVIDIA (needs a Sunshine build with CUDA)
+# On hybrid laptops the integrated GPU is a good choice: it keeps the
+# discrete GPU free for games and lets it sleep.
+ENCODER=vaapi
+ADAPTER=/dev/dri/renderD128
+
+# Which physical screen to include in the wall:
+#   auto        - the primary screen
+#   <name>      - a specific output, e.g. eDP-1 or DP-2 (see `kscreen-doctor -o`)
+#   none        - virtual monitors only
+# The included screen must use 100% scaling.
+PHYSICAL=auto
+
+# Wall presets, one Moonlight app each:  "COUNT WIDTHxHEIGHT REFRESH LAYOUT"
+#   COUNT    number of virtual monitors
+#   REFRESH  virtual monitor refresh rate AND stream fps. Match your headset's
+#            refresh rate (e.g. 90, 108, 120): a stream faster than the headset
+#            wastes GPU time and can make head movement stutter.
+#   LAYOUT   top  - virtual monitors in a row, physical screen centred below
+#                   (2x 1080p over a 1920x1200 laptop = 3840x2280, close to
+#                   16:9, so it fills a theater/cinema screen)
+#            row  - physical screen in the middle, virtual monitors left/right
+#                   (wide; letterboxed on a 16:9 theater screen)
+#            grid - all screens in a near-square grid of equal cells
+PRESETS=(
+    "2 1920x1080 120 top"
+    "2 1920x1080 108 top"
+    "2 1920x1080 90 top"
+    "3 1920x1080 90 grid"
+)
+
+# Where Sunshine keeps its state (pairing), log and generated config.
+#SUNSHINE_DIR="$HOME/.config/framewall/sunshine"
+
+# Extra sunshine.conf lines, e.g. a smaller FEC share on a clean link:
+#EXTRA_SUNSHINE_CONFIG="fec_percentage = 10"
