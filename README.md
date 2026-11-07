@@ -1,6 +1,6 @@
-# DISCLAIMER: This whole repository is vibecoded, and while I have some programming experience, I did not review everything that claude wrote, proceed with caution and I am not responsible for any damages caused to your computer or your headset.
-
 # framewall
+
+**# DISCLAIMER: This whole repository is vibecoded, and while I have some programming experience, I did not review everything that claude wrote, proceed with caution and I am not responsible for any damages caused to your computer or your headset.**
 
 Stream your Linux desktop to a VR headset as a **monitor wall**: your real
 screens plus any number of **virtual monitors**, captured together as **one**
@@ -70,7 +70,7 @@ cd framewall
 mkdir -p ~/.local/bin ~/.config/framewall
 install -m 755 host/framewall ~/.local/bin/framewall
 cp host/config.example ~/.config/framewall/config
-Open the config file at "~/.config/framewall/config" to edit your preferred settings     # presets, encoder, GPU, port
+$EDITOR "~/.config/framewall/config"   # presets, encoder, GPU, port
 framewall install
 ```
 
@@ -95,7 +95,7 @@ It runs as a systemd user service (`framewall.service`) from login. Run
 3. Copy `client/framewall` to the headset, e.g. `~/framewall`, and make it
    executable. Optionally copy `client/framewall.conf.example` to
    `~/.config/framewall.conf` to pick a default preset and bitrate.
-4. In deskop mode, go to ~/framewall, right click framewall (Click thumbstick), and click "Add to Steam"
+4. In deskop mode, right click ~/framewall (Click thumbstick), and click "Add to Steam"
 
 5. In Steam's settings, set **Maximum game resolution** to the smallest option
    that is at least as large as the wall: **3840×2400** for a 3840×2280 wall.
