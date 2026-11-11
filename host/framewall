@@ -48,6 +48,7 @@ kscreen_json() { kscreen-doctor -j 2>/dev/null; }
 #   plan COUNT W H LAYOUT
 # Prints:
 #   WALL w h              wall size (= stream size)
+#   BLOCK w h             size of the block of physical screens in the wall
 #   REGION x y w h        rectangle Sunshine captures
 #   POS name x y          where each screen of the wall goes
 #   SAVE name x y         original position of every other screen (restored by down)
@@ -147,6 +148,7 @@ else:
 ox = max((geom(o)[0] + geom(o)[2] for o in excluded), default=0)
 oy = 0
 print("WALL", W, H)
+print("BLOCK", bw, bh)
 print("REGION", ox, oy, W, H)
 for name, (x, y, sw, sh) in block.items():
     nx, ny = ox + bpos[0] + (x - bx0), oy + bpos[1] + (y - by0)
@@ -179,9 +181,11 @@ if g:
 }
 
 # Moonlight app name for a preset; the client reads the stream size and
-# refresh rate from it ("... @RATE ... (WxH)").
-app_name() {   # count res hz shape W H
-    echo "Wall ${1}x${2}@${3} ${4} (${5}x${6})"
+# refresh rate from it ("... @RATE ... (WxH)"). "+BWxBH" is the size of the
+# physical-screen block: with it, the VR client can work out where every
+# monitor sits in the stream (same layout rules as plan).
+app_name() {   # count res hz shape BW BH W H
+    echo "Wall ${1}x${2}@${3} ${4} +${5}x${6} (${7}x${8})"
 }
 
 # Smallest common Steam "Maximum game resolution" that fits a WxH wall, so the
@@ -213,12 +217,14 @@ wait_for_output() {
 }
 
 cmd_apps() {
-    local json p count w h hz shape W H
+    local json p count w h hz shape W H BW BH out
     json=$(kscreen_json)
     for p in "${PRESETS[@]}"; do
         read -r count w h hz shape <<< "$(preset_fields "$p")"
-        read -r _ W H < <(plan "$count" "$w" "$h" "$shape" <<< "$json" | grep '^WALL')
-        app_name "$count" "${w}x$h" "$hz" "$shape" "$W" "$H"
+        out=$(plan "$count" "$w" "$h" "$shape" <<< "$json")
+        read -r _ W H <<< "$(grep '^WALL' <<< "$out")"
+        read -r _ BW BH <<< "$(grep '^BLOCK' <<< "$out")"
+        app_name "$count" "${w}x$h" "$hz" "$shape" "$BW" "$BH" "$W" "$H"
     done
 }
 
@@ -353,10 +359,15 @@ UNIT
     echo "framewall: Sunshine \"$NAME\" running on port $PORT"
     echo "  pair from Moonlight, then enter the PIN at https://localhost:$((PORT + 1))"
     echo "  firewall: allow TCP $((PORT - 5)),$PORT,$((PORT + 1)),$((PORT + 21)) and UDP $((PORT + 9))-$((PORT + 11)),$((PORT + 13))"
-    echo "  apps (and the Steam \"Maximum game resolution\" to pick on the headset):"
+    echo "  apps (with Moonlight, set the headset's Steam \"Maximum game resolution\" as shown;"
+    echo "  framewall-vr shows each monitor as its own panel and doesn't need it):"
     local a
     while IFS= read -r a; do
-        [[ "$a" =~ \(([0-9]+)x([0-9]+)\)$ ]] && a="$a  ->  Steam: $(steam_fit "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}")"
+        if [[ "$a" == *" row "* ]]; then
+            a="$a  ->  for framewall-vr"
+        elif [[ "$a" =~ \(([0-9]+)x([0-9]+)\)$ ]]; then
+            a="$a  ->  Steam: $(steam_fit "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}")"
+        fi
         echo "    $a"
     done < <(cmd_apps)
 }

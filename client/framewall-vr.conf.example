@@ -1,0 +1,23 @@
+# framewall-vr settings (on the headset: ~/.config/framewall-vr.conf).
+# framewall-vr creates this file the first time it runs.
+
+# ---- Panels: save this file and they move right away, no restart needed ----
+
+# Sizes: 1 = normal, 1.5 = half again as big, 0.8 = a bit smaller.
+SIZE=1            # every panel at once
+SCREENS_SIZE=1    # your PC's own screen (the middle panel)
+VIRTUAL1_SIZE=1   # virtual monitor 1 (on the left)
+VIRTUAL2_SIZE=1   # virtual monitor 2 (on the right)
+# More virtual monitors: VIRTUAL3_SIZE=1, VIRTUAL4_SIZE=1, ...
+
+DISTANCE=1.5      # how far away the panels are, in metres
+HEIGHT=-0.1       # up (+) or down (-) from eye level, in metres
+GAP=0.03          # space between panels, in metres
+
+# ---- Stream: these apply the next time framewall-vr starts ----
+
+APP=""            # wall preset (list them: ~/framewall-vr --list); empty = side by side, at the headset's refresh rate
+BITRATE_KBPS=""   # empty = automatic; higher keeps text sharper while scrolling
+AUDIO=1           # 0 = no sound from the PC
+HOST=""           # framewall host as Moonlight names it; empty = the first one ending in " wall"
+QUIT_ON_EXIT=1    # 1 = closing framewall-vr removes the virtual monitors on the PC

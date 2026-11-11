@@ -35,6 +35,14 @@ Built for the **Steam Frame**, with a KDE Plasma laptop or desktop as the host.
   bounding box of all screens.
 - **Client** (`client/framewall`): runs Moonlight on the headset with the
   right resolution and frame rate, read from the preset's app name.
+- **VR client** (`vr/`, `framewall-vr`): instead of one flat theater screen,
+  shows every monitor of the wall as its own panel, side by side on a curve
+  around you. It's a native SteamVR overlay app for the Steam Frame built on
+  Moonlight's streaming library (moonlight-common-c), and reuses Moonlight's
+  pairing. The wall is decoded on the headset's hardware decoder and
+  converted once on the GPU, then each panel shows its own region of it.
+  Mouse and keyboard stay on the PC; the controllers are passed through as
+  an Xbox controller.
 
 ## Requirements
 
@@ -108,6 +116,38 @@ Launch it from Steam. To switch presets, set `APP` in
 `~/.config/framewall.conf` (`~/framewall --list` shows the names), or give
 the app name as a launch option.
 
+### 4. Headset: side-by-side panels with framewall-vr (optional)
+
+Do step 3's Moonlight pairing first: framewall-vr uses Moonlight's pairing.
+Then, on the headset (Desktop mode or SSH):
+
+```sh
+git clone https://github.com/TylerK26/framewall.git ~/src/framewall
+~/src/framewall/vr/build.sh
+```
+
+That downloads its two dependencies (moonlight-common-c and the OpenVR SDK),
+builds it, installs it to `~/.local/opt/framewall-vr` and the launcher to
+`~/framewall-vr`. Add `~/framewall-vr` to Steam as a non-Steam game with the
+**Gamepad** controller layout, and launch it from Steam. It picks the host's
+side-by-side (`row`) preset matching the headset's refresh rate.
+
+- A small status window appears too: Steam only gives controller input to the
+  focused window of the game it launched, so select it if the controllers
+  don't reach the PC. Closing it stops the stream.
+- Recenter in SteamVR to bring the panels in front of you.
+- **Panel sizes and placement** are in `~/.config/framewall-vr.conf`, which
+  framewall-vr creates on its first run: a size for each panel (`1` = normal,
+  `1.5` = half again as big), plus distance, height and the gap between
+  panels. Save the file and the panels change right away, mid-stream; the
+  other panels move to make room. From a KDE PC with SSH access to the
+  headset you can edit it directly, e.g.
+  `kate sftp://steamos@HEADSET/home/steamos/.config/framewall-vr.conf`.
+  The same file has the stream settings (preset, bitrate, audio), which
+  apply on the next start; see `client/framewall-vr.conf.example`.
+- `~/framewall-vr --list` lists the host's presets, `~/framewall-vr --quit`
+  closes a wall left running. The log is `~/.cache/framewall-vr.log`.
+
 ## Configuration
 
 Host (`~/.config/framewall/config`, see `host/config.example`):
@@ -125,7 +165,8 @@ Layouts (the physical screens move as one block, keeping their arrangement):
   monitors over a 16:10 laptop the wall is close to 16:9, so it **fills a
   theater screen**.
 - `row`: physical screens in the middle, virtual monitors left and right. Wide,
-  so it's letterboxed on a 16:9 screen.
+  so it's letterboxed on a 16:9 screen; meant for framewall-vr, which shows
+  the monitors side by side around you.
 - `grid`: virtual monitors in rows above the physical screens, with the column
   count that makes the wall closest to 16:9.
 
@@ -137,6 +178,11 @@ to their right. Multi-monitor layouts are tested with simulated screens only.
 
 Client (`~/.config/framewall.conf` on the headset): `HOST`, `APP`,
 `BITRATE_KBPS`, `ABSOLUTE_MOUSE`.
+
+VR client (`~/.config/framewall-vr.conf` on the headset): `SIZE`,
+`SCREENS_SIZE`, `VIRTUAL1_SIZE`, `VIRTUAL2_SIZE`, ..., `DISTANCE`, `HEIGHT`,
+`GAP` (applied live), and `APP`, `BITRATE_KBPS`, `AUDIO`, `HOST`,
+`QUIT_ON_EXIT` (applied on the next start).
 
 ## Tips
 

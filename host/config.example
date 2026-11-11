@@ -43,11 +43,18 @@ PHYSICAL=all
 #                   left/right (wide; letterboxed on a 16:9 theater screen)
 #            grid - virtual monitors in rows above the physical screens, with
 #                   the column count that makes the wall closest to 16:9
+# The `row` presets are for framewall-vr (client/framewall-vr), which shows
+# each monitor as its own panel side by side around you; it picks the row
+# preset matching the headset's refresh rate. The others suit Moonlight's
+# theater screen.
 PRESETS=(
     "2 1920x1080 120 top"
     "2 1920x1080 108 top"
     "2 1920x1080 90 top"
     "3 1920x1080 90 grid"
+    "2 1920x1080 120 row"
+    "2 1920x1080 108 row"
+    "2 1920x1080 90 row"
 )
 
 # Where Sunshine keeps its state (pairing), log and generated config.

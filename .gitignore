@@ -1,0 +1,4 @@
+vr/build/
+vr/build-*/
+vr/third_party/
+vr/compile_commands.json

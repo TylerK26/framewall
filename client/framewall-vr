@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# framewall-vr launcher: add this to Steam as a non-Steam game (controller
+# layout: Gamepad) and launch it from Steam. It shows the wall from the
+# framewall host as separate panels side by side around you.
+#
+# Extra arguments go to framewall-vr, e.g. a preset name, or --list.
+# Settings: ~/.config/framewall-vr.conf.  Log: ~/.cache/framewall-vr.log.
+#
+# Copyright (C) 2026 framewall contributors. GPL-3.0-or-later.
+BIN="$HOME/.local/opt/framewall-vr/framewall-vr"
+
+log="$HOME/.cache/framewall-vr.log"
+mkdir -p "$HOME/.cache"
+# Keep the previous run's log next to the new one.
+[[ -f "$log" ]] && mv -f "$log" "$log.1"
+exec "$BIN" "$@" 2>>"$log"
