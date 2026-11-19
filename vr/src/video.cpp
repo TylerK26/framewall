@@ -6,6 +6,7 @@
 
 #include <linux/videodev2.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <cstring>
 #include <fcntl.h>
@@ -256,7 +257,7 @@ void VideoPipeline::run() {
     bool shown_overlays = false;
     auto last_report = clk::now();
     uint64_t shown_at_report = 0;
-    double decode_sum = 0, convert_sum = 0;
+    double decode_sum = 0, convert_sum = 0, gpu_sum = 0, gpu_max = 0;
     int timed = 0, consecutive_errors = 0;
 
     while (running_) {
@@ -342,6 +343,7 @@ void VideoPipeline::run() {
         const uint64_t n = ++stats.shown;
         decode_sum += std::chrono::duration<double, std::micro>(t0 - latest_fed).count();
         convert_sum += std::chrono::duration<double, std::micro>(t1 - t0).count();
+        if (g_conv.last_gpu_ms >= 0) { gpu_sum += g_conv.last_gpu_ms; gpu_max = std::max(gpu_max, g_conv.last_gpu_ms); }
         timed++;
         if (!opt_.dump_path.empty() && n == uint64_t(opt_.dump_frame)) {
             const bool ok = g_conv.dump_last(opt_.dump_path);
@@ -354,13 +356,13 @@ void VideoPipeline::run() {
             stats.fps = int((n - shown_at_report) / secs + 0.5);
             stats.decode_us = timed ? int(decode_sum / timed) : 0;
             stats.convert_us = timed ? int(convert_sum / timed) : 0;
-            fwlog("video: %d fps shown, receive->decoded %.1f ms, convert %.1f ms (received %llu, decoded %llu, errors %llu, dropped %llu)",
-                  stats.fps.load(), stats.decode_us / 1000.0, stats.convert_us / 1000.0,
+            fwlog("video: %d fps shown, receive->decoded %.1f ms, convert %.1f ms (gpu %.2f avg / %.2f max) (received %llu, decoded %llu, errors %llu, dropped %llu)",
+                  stats.fps.load(), stats.decode_us / 1000.0, stats.convert_us / 1000.0, timed ? gpu_sum / timed : 0.0, gpu_max,
                   (unsigned long long)stats.received, (unsigned long long)stats.decoded,
                   (unsigned long long)stats.errors, (unsigned long long)stats.dropped);
             last_report = now;
             shown_at_report = n;
-            decode_sum = convert_sum = 0;
+            decode_sum = convert_sum = gpu_sum = gpu_max = 0;
             timed = 0;
         }
     }

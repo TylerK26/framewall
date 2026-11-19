@@ -20,6 +20,11 @@ SUNSHINE="$HOME/.local/opt/sunshine-wall/bin/sunshine"
 # discrete GPU free for games and lets it sleep.
 ENCODER=vaapi
 ADAPTER=/dev/dri/renderD128
+# VA-API encoder preset: speed (default) | balanced | quality | auto.
+# "speed" is the encoder's fastest level: on an Intel Arc iGPU it encodes a
+# 5760x1200 wall at ~245 fps vs ~165 at the driver default, i.e. ~4 ms
+# instead of ~6 ms per frame, which 144 Hz (6.9 ms per frame) needs.
+#VAAPI_QUALITY=speed
 
 # Physical screens in the wall. They keep their current arrangement (as one
 # block) and the virtual monitors are added around it.
@@ -35,7 +40,7 @@ PHYSICAL=all
 # Wall presets, one Moonlight app each:  "COUNT WIDTHxHEIGHT REFRESH LAYOUT"
 #   COUNT    number of virtual monitors
 #   REFRESH  virtual monitor refresh rate AND stream fps. Match your headset's
-#            refresh rate (e.g. 90, 108, 120): a stream faster than the headset
+#            refresh rate (e.g. 90, 108, 120, 144): a stream faster than the headset
 #            wastes GPU time and can make head movement stutter.
 #   LAYOUT   top  - virtual monitors in a row above the physical screens
 #                   (e.g. 2x 1080p over a 1920x1200 laptop = 3840x2280, close
@@ -49,10 +54,12 @@ PHYSICAL=all
 # preset matching the headset's refresh rate. The others suit Moonlight's
 # theater screen.
 PRESETS=(
+    "2 1920x1080 144 top"
     "2 1920x1080 120 top"
     "2 1920x1080 108 top"
     "2 1920x1080 90 top"
     "3 1920x1080 90 grid"
+    "2 1920x1080 144 row"
     "2 1920x1080 120 row"
     "2 1920x1080 108 row"
     "2 1920x1080 90 row"

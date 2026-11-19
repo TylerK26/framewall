@@ -301,6 +301,45 @@ void draw_window(SDL_Renderer *r, const std::string &app) {
 
 void on_signal(int) { g_stop = true; }
 
+// SteamVR compositor health: head-motion stutter is the compositor missing
+// vsync (an old frame scanned out again), not the stream's fps. Polled from
+// the main loop (every ~20 ms) over the last few frames, logged every 5 s.
+class CompositorWatch {
+public:
+    void poll() {
+        if (!vr::VRCompositor()) return;
+        vr::Compositor_FrameTiming t[16];
+        for (auto &x : t) x.m_nSize = sizeof x;
+        const uint32_t n = vr::VRCompositor()->GetFrameTimings(t, 16);
+        for (uint32_t i = 0; i < n; i++) {
+            if (have_last_ && int32_t(t[i].m_nFrameIndex - last_) <= 0) continue;
+            frames_++;
+            dropped_ += t[i].m_nNumDroppedFrames;
+            mispresented_ += t[i].m_nNumMisPresented ? 1 : 0;
+            gpu_sum_ += t[i].m_flCompositorRenderGpuMs;
+            gpu_max_ = std::max(gpu_max_, t[i].m_flCompositorRenderGpuMs);
+            total_max_ = std::max(total_max_, t[i].m_flTotalRenderGpuMs);
+        }
+        for (uint32_t i = 0; i < n; i++)
+            if (!have_last_ || int32_t(t[i].m_nFrameIndex - last_) > 0) { last_ = t[i].m_nFrameIndex; have_last_ = true; }
+        const uint64_t now = SDL_GetTicks();
+        if (now - since_ >= 5000) {
+            if (frames_)
+                fwlog("compositor: %u frames, %u dropped, %u mispresented, gpu %.2f ms avg / %.2f max, total gpu %.2f max",
+                      frames_, dropped_, mispresented_, gpu_sum_ / frames_, gpu_max_, total_max_);
+            frames_ = dropped_ = mispresented_ = 0;
+            gpu_sum_ = gpu_max_ = total_max_ = 0;
+            since_ = now;
+        }
+    }
+
+private:
+    uint32_t last_ = 0, frames_ = 0, dropped_ = 0, mispresented_ = 0;
+    bool have_last_ = false;
+    float gpu_sum_ = 0, gpu_max_ = 0, total_max_ = 0;
+    uint64_t since_ = 0;
+};
+
 }  // namespace
 
 int main(int argc, char **argv) {
@@ -485,7 +524,9 @@ int main(int argc, char **argv) {
     const auto t0 = SDL_GetTicks();
     uint64_t last_draw = 0;
     bool checked_visible = false;
+    CompositorWatch compositor;
     while (!g_stop) {
+        compositor.poll();
         if (s.window) {
             SDL_Event e;
             if (SDL_WaitEventTimeout(&e, 20)) {

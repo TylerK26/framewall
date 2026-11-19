@@ -38,6 +38,8 @@ public:
     // Convert decoder buffer `idx`; returns the SteamVR handle to show. The
     // decoder buffer may be reused as soon as this returns.
     vr::SharedTextureHandle_t convert(int idx);
+    // GPU time of the last convert in ms (timer query), or -1 if unavailable.
+    double last_gpu_ms = -1;
     // Save the last converted frame as a binary PPM (for testing).
     bool dump_last(const std::string &path);
     void release_captures();
@@ -62,6 +64,8 @@ private:
     PFNGLEGLIMAGETARGETTEXTURE2DOESPROC imageTarget_ = nullptr;
     GLuint prog_ = 0, vao_ = 0;
     GLint scale_loc_ = -1;
+    GLuint query_ = 0;
+    void (*getQueryU64_)(GLuint, GLenum, GLuint64 *) = nullptr;
     std::vector<Src> src_;
     Out out_[kRing];
     int next_ = 0, last_ = -1;

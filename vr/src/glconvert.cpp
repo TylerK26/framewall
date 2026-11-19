@@ -3,6 +3,7 @@
 
 #include "log.h"
 
+#include <cstring>
 #include <fcntl.h>
 #include <unistd.h>
 
@@ -37,6 +38,13 @@ bool GlConverter::init(int width, int height) {
     fwlog("gl: %s / %s", glGetString(GL_RENDERER), glGetString(GL_VERSION));
 
     if (!build_program()) return false;
+    {
+        // GPU time of the pass (the wall-clock "convert" time also includes
+        // waiting for the GPU, which the SteamVR compositor shares).
+        const char *gl_exts = reinterpret_cast<const char *>(glGetString(GL_EXTENSIONS));
+        getQueryU64_ = reinterpret_cast<void (*)(GLuint, GLenum, GLuint64 *)>(eglGetProcAddress("glGetQueryObjectui64vEXT"));
+        if (gl_exts && std::strstr(gl_exts, "GL_EXT_disjoint_timer_query") && getQueryU64_) glGenQueries(1, &query_);
+    }
     glGenVertexArrays(1, &vao_);
     for (int i = 0; i < kRing; i++)
         if (!make_output(i)) return false;
@@ -75,9 +83,16 @@ vr::SharedTextureHandle_t GlConverter::convert(int idx) {
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_EXTERNAL_OES, src_[idx].tex);
     glBindVertexArray(vao_);
+    if (query_) glBeginQuery(0x88BF /* GL_TIME_ELAPSED_EXT */, query_);
     glDrawArrays(GL_TRIANGLES, 0, 3);
+    if (query_) glEndQuery(0x88BF);
     // Done before the decoder reuses its buffer and before SteamVR reads ours.
     glFinish();
+    if (query_) {
+        GLuint64 ns = 0;
+        getQueryU64_(query_, GL_QUERY_RESULT, &ns);
+        last_gpu_ms = ns / 1e6;
+    }
     last_ = slot;
     return out_[slot].handle;
 }
@@ -217,6 +232,8 @@ void GlConverter::destroy() {
         o = Out{};
     }
     if (vao_) glDeleteVertexArrays(1, &vao_);
+    if (query_) glDeleteQueries(1, &query_);
+    query_ = 0;
     if (prog_) glDeleteProgram(prog_);
     vao_ = prog_ = 0;
     eglMakeCurrent(dpy_, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
