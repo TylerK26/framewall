@@ -35,6 +35,7 @@ public:
     bool quit(std::string &err);
 
     const std::string &address() const { return address_; }
+    int http_port() const { return http_port_; }
 
 private:
     bool get(bool https, const std::string &path, const std::string &query, long timeout_ms,

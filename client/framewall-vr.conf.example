@@ -2,6 +2,8 @@
 # framewall-vr creates this file the first time it runs.
 
 # ---- Panels: save this file and they move right away, no restart needed ----
+# Easier: run framewall-panels on the PC while streaming. It has a slider for
+# each of these, moves the panels as you drag and saves the values here.
 
 # Sizes: 1 = normal, 1.5 = half again as big, 0.8 = a bit smaller.
 SIZE=1            # every panel at once

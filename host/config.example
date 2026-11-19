@@ -6,7 +6,8 @@ NAME="$(hostname -s) wall"
 
 # Sunshine base port. framewall's Sunshine is separate from any normal
 # Sunshine you run (default 47989), so pick a port range that doesn't clash.
-# Firewall: TCP PORT-5, PORT, PORT+1 (web UI), PORT+21; UDP PORT+9..PORT+11, PORT+13.
+# Firewall: TCP PORT-5, PORT, PORT+1 (web UI), PORT+5 (framewall-panels), PORT+21;
+# UDP PORT+9..PORT+11, PORT+13.
 PORT=48389
 
 # Patched Sunshine (built by sunshine/build.sh).

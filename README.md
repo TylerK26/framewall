@@ -136,17 +136,32 @@ side-by-side (`row`) preset matching the headset's refresh rate.
   focused window of the game it launched, so select it if the controllers
   don't reach the PC. Closing it stops the stream.
 - Recenter in SteamVR to bring the panels in front of you.
-- **Panel sizes and placement** are in `~/.config/framewall-vr.conf`, which
-  framewall-vr creates on its first run: a size for each panel (`1` = normal,
-  `1.5` = half again as big), plus distance, height and the gap between
-  panels. Save the file and the panels change right away, mid-stream; the
-  other panels move to make room. From a KDE PC with SSH access to the
-  headset you can edit it directly, e.g.
-  `kate sftp://steamos@HEADSET/home/steamos/.config/framewall-vr.conf`.
-  The same file has the stream settings (preset, bitrate, audio), which
-  apply on the next start; see `client/framewall-vr.conf.example`.
+- **Panel sizes and placement:** run `framewall-panels` on the PC while
+  streaming (see below). It's a small window with a slider for each panel's
+  size, plus distance, height and the gap between panels. The window is on
+  your PC's screen, so you can see it in the headset and drag the sliders with
+  the PC's mouse; the panels change as you drag, and the other panels move to
+  make room. framewall-vr saves the values on the headset, in
+  `~/.config/framewall-vr.conf`.
+- That file (created on the first run) can also be edited by hand: save it and
+  the panels change right away. It has the stream settings too (preset,
+  bitrate, audio), which apply on the next start; see
+  `client/framewall-vr.conf.example`.
 - `~/framewall-vr --list` lists the host's presets, `~/framewall-vr --quit`
   closes a wall left running. The log is `~/.cache/framewall-vr.log`.
+
+To install `framewall-panels` on the PC (it needs PySide6 or PyQt6, e.g.
+`python-pyqt6` on Arch):
+
+```sh
+install -m 755 host/framewall-panels ~/.local/bin/framewall-panels
+install -Dm 644 host/framewall-panels.desktop ~/.local/share/applications/framewall-panels.desktop
+```
+
+It shows up as **Framewall panels** in the app menu, and it can be opened
+before or after the stream starts. framewall-vr connects to it at the
+host's address on Sunshine's `PORT` + 5 (TCP 48394 by default), which is
+inside the firewall range above.
 
 ## Configuration
 

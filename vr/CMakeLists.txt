@@ -43,10 +43,12 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${CONF_EXAMPLE})
 add_executable(framewall-vr
   src/main.cpp
   src/audio.cpp
+  src/control.cpp
   src/glconvert.cpp
   src/layout.cpp
   src/moonlight_conf.cpp
   src/nvhttp.cpp
+  src/settings.cpp
   src/video.cpp)
 target_compile_options(framewall-vr PRIVATE -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers)
 target_include_directories(framewall-vr PRIVATE

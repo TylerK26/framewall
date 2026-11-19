@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Framewall panels
+GenericName=VR panel sizes
+Comment=Resize and place framewall-vr's panels in the headset, live
+Exec=framewall-panels
+Icon=preferences-desktop-display
+Categories=Utility;Settings;
+Keywords=framewall;vr;steam frame;monitor;

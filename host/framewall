@@ -358,7 +358,7 @@ UNIT
     systemctl --user restart framewall.service
     echo "framewall: Sunshine \"$NAME\" running on port $PORT"
     echo "  pair from Moonlight, then enter the PIN at https://localhost:$((PORT + 1))"
-    echo "  firewall: allow TCP $((PORT - 5)),$PORT,$((PORT + 1)),$((PORT + 21)) and UDP $((PORT + 9))-$((PORT + 11)),$((PORT + 13))"
+    echo "  firewall: allow TCP $((PORT - 5)),$PORT,$((PORT + 1)),$((PORT + 5)) (framewall-panels),$((PORT + 21)) and UDP $((PORT + 9))-$((PORT + 11)),$((PORT + 13))"
     echo "  apps (with Moonlight, set the headset's Steam \"Maximum game resolution\" as shown;"
     echo "  framewall-vr shows each monitor as its own panel and doesn't need it):"
     local a

@@ -18,15 +18,17 @@
 //
 // Settings: ~/.config/framewall-vr.conf (KEY=VALUE, see framewall-vr.conf.example),
 // created on the first run. Panel sizes and placement apply as soon as the file
-// is saved, while streaming.
+// is saved, while streaming, or live from the panel editor on the PC
+// (host/framewall-panels, see control.h), which saves them into the file.
 //
 // Copyright (C) 2026 framewall contributors. GPL-3.0-or-later.
 #include "audio.h"
+#include "control.h"
 #include "layout.h"
 #include "log.h"
 #include "moonlight_conf.h"
 #include "nvhttp.h"
-#include "conf_template.h"
+#include "settings.h"
 #include "video.h"
 
 #include <Limelight.h>
@@ -42,11 +44,9 @@
 #include <cstdarg>
 #include <cstdlib>
 #include <cstring>
-#include <fstream>
 #include <map>
 #include <memory>
 #include <string>
-#include <sys/stat.h>
 #include <unistd.h>
 #include <vector>
 
@@ -62,89 +62,14 @@ Rumble g_rumble[4];
 
 // ---- settings -----------------------------------------------------------------
 
-struct Settings {
-    std::string host, app;
-    int bitrate_kbps = 0;  // 0 = automatic from the wall size
-    bool audio = true;
-    bool quit_on_exit = true;
-    int window = -1;       // -1 = only when launched from Steam
-    int seconds = 0;       // stop after this long (testing)
-    std::string dump;
-    bool list = false;
-    bool quit = false;     // just quit the wall on the host
-    Placement place;
-    std::map<std::string, float> panel_size;  // panel name -> size multiplier
-};
-
-std::string settings_path() {
-    const char *home = std::getenv("HOME");
-    return std::string(home ? home : "") + "/.config/framewall-vr.conf";
-}
-
 bool ends_with(const std::string &s, const std::string &suffix) {
     return s.size() >= suffix.size() && s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
-}
-
-std::string trim(std::string s) {
-    const auto b = s.find_first_not_of(" \t"), e = s.find_last_not_of(" \t");
-    s = b == std::string::npos ? "" : s.substr(b, e - b + 1);
-    if (s.size() >= 2 && (s.front() == '"' || s.front() == '\'') && s.back() == s.front()) s = s.substr(1, s.size() - 2);
-    return s;
-}
-
-void load_settings(Settings &s) {
-    const std::string path = settings_path();
-    std::ifstream in(path);
-    if (!in) {
-        // First run: write the file with every setting, so editing it is
-        // just changing numbers.
-        const std::string dir = path.substr(0, path.rfind('/'));
-        mkdir(dir.c_str(), 0755);
-        std::ofstream out(path);
-        out << kConfTemplate;
-        if (out) fwlog("settings: created %s", path.c_str());
-        out.close();
-        in.open(path);
-    }
-    std::string line;
-    float size = 1;
-    while (std::getline(in, line)) {
-        const auto hash = line.find('#');
-        if (hash != std::string::npos) line = line.substr(0, hash);
-        const auto eq = line.find('=');
-        if (eq == std::string::npos) continue;
-        const std::string k = trim(line.substr(0, eq)), v = trim(line.substr(eq + 1));
-        auto f = [&] { return std::strtof(v.c_str(), nullptr); };
-        if (k == "HOST") s.host = v;
-        else if (k == "APP") s.app = v;
-        else if (k == "BITRATE_KBPS") s.bitrate_kbps = std::atoi(v.c_str());
-        else if (k == "AUDIO") s.audio = v != "0";
-        else if (k == "QUIT_ON_EXIT") s.quit_on_exit = v != "0";
-        else if (k == "DISTANCE" && f() >= 0.3f) s.place.radius = f();
-        else if (k == "HEIGHT") s.place.height = f();
-        else if (k == "GAP" && f() >= 0) s.place.gap = f();
-        else if (k == "SIZE" && f() > 0.05f) size = f();
-        else if (k == "SCREENS_SIZE" && f() > 0.05f) s.panel_size["Screens"] = f();
-        else if (k.size() > 12 && k.compare(0, 7, "VIRTUAL") == 0 && ends_with(k, "_SIZE") && f() > 0.05f)
-            s.panel_size["Virtual " + k.substr(7, k.size() - 12)] = f();
-        else if (!k.empty()) fwlog("settings: unknown key %s", k.c_str());
-    }
-    s.place.meters_1920 = 1.25f * size;  // SIZE=1: a 1080p monitor is 1.25 m wide
-}
-
-// The settings file's modification time, to notice edits.
-long long settings_mtime() {
-    struct stat st;
-    return stat(settings_path().c_str(), &st) == 0 ? (long long)st.st_mtim.tv_sec * 1000000000LL + st.st_mtim.tv_nsec : 0;
 }
 
 // Places the panels from the settings' placement and sizes.
 void place_overlays(const Wall &wall, const Settings &s, const std::vector<vr::VROverlayHandle_t> &overlays) {
     std::vector<float> scales;
-    for (const auto &p : wall.panels) {
-        auto it = s.panel_size.find(p.name);
-        scales.push_back(it != s.panel_size.end() ? it->second : 1.0f);
-    }
+    for (const auto &p : wall.panels) scales.push_back(panel_scale(s, p.name));
     const auto poses = place_panels(wall, s.place, scales);
     for (size_t i = 0; i < overlays.size() && i < poses.size(); i++) {
         vr::VROverlay()->SetOverlayWidthInMeters(overlays[i], poses[i].width_m);
@@ -462,6 +387,16 @@ int main(int argc, char **argv) {
     place_overlays(wall, s, vopt.overlays);
     long long conf_mtime = settings_mtime();
     uint64_t last_conf_check = 0;
+    // The panel editor on the PC: Sunshine's port + 5 at the host's address.
+    ControlLink editor(http->address(), http->http_port() + 5);
+    std::map<std::string, std::string> unsaved;  // editor changes not yet in the file
+    uint64_t last_edit = 0;
+    auto save_edits = [&] {
+        if (unsaved.empty()) return;
+        if (save_settings(unsaved)) fwlog("settings: saved the panel editor's changes");
+        unsaved.clear();
+        conf_mtime = settings_mtime();  // our own write: no reload
+    };
 
     SDL_Window *win = nullptr;
     SDL_Renderer *ren = nullptr;
@@ -572,17 +507,35 @@ int main(int argc, char **argv) {
                 g_stop = true;
             }
         }
+        // The panel editor: send it the settings when it connects, and move
+        // the panels as its sliders move. Its changes go into the settings
+        // file once they settle.
+        {
+            bool fresh = false;
+            std::map<std::string, std::string> sets;
+            editor.poll(fresh, sets);
+            if (fresh) editor.send(editor_snapshot(app->title, wall, s));
+            bool moved = false;
+            for (auto &[k, v] : sets) {
+                if (set_panel_setting(s, k, v)) { unsaved[k] = v; moved = true; }
+                else fwlog("panel editor: ignoring %s %s", k.c_str(), v.c_str());
+            }
+            if (moved) { place_overlays(wall, s, vopt.overlays); last_edit = SDL_GetTicks(); }
+            if (!unsaved.empty() && SDL_GetTicks() - last_edit > 1000) save_edits();
+        }
         // Settings file saved: move the panels to match.
-        if (SDL_GetTicks() - last_conf_check > 500) {
+        if (unsaved.empty() && SDL_GetTicks() - last_conf_check > 500) {
             last_conf_check = SDL_GetTicks();
             const long long m = settings_mtime();
             if (m && m != conf_mtime) {
                 conf_mtime = m;
                 Settings fresh;
                 load_settings(fresh);
+                s.size = fresh.size;
                 s.place = fresh.place;
                 s.panel_size = fresh.panel_size;
                 place_overlays(wall, s, vopt.overlays);
+                editor.send(editor_snapshot(app->title, wall, s));
                 fwlog("settings: panels updated");
             }
         }
@@ -596,6 +549,7 @@ int main(int argc, char **argv) {
     }
 
     fwlog("stopping");
+    save_edits();
     g_status = "stopping";
     if (ren) draw_window(ren, app->title);
     LiStopConnection();
