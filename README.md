@@ -20,6 +20,10 @@ Built for the **Steam Frame**, with a KDE Plasma laptop or desktop as the host.
   appear on the PC as an Xbox controller, and the laser pointer works as a mouse
   that lines up with the desktop. Moonlight runs in its absolute ("remote
   desktop") mouse mode; set `ABSOLUTE_MOUSE=0` for mouse-look games.
+- **Or side by side, at 144 Hz.** framewall-vr, a native OpenXR app for the
+  headset, shows every monitor as its own curved panel around you, over a dark
+  void or your room (passthrough), with a laser pointer for the PC's mouse, the
+  controllers as an Xbox controller, and an in-headset menu.
 
 ## How it works
 
@@ -37,12 +41,16 @@ Built for the **Steam Frame**, with a KDE Plasma laptop or desktop as the host.
   right resolution and frame rate, read from the preset's app name.
 - **VR client** (`vr/`, `framewall-vr`): instead of one flat theater screen,
   shows every monitor of the wall as its own panel, side by side on a curve
-  around you. It's a native SteamVR overlay app for the Steam Frame built on
+  around you. It's a native OpenXR app (Vulkan) for the Steam Frame built on
   Moonlight's streaming library (moonlight-common-c), and reuses Moonlight's
-  pairing. The wall is decoded on the headset's hardware decoder and
-  converted once on the GPU, then each panel shows its own region of it.
-  Mouse and keyboard stay on the PC; the controllers are passed through as
-  an Xbox controller.
+  pairing. The wall is decoded on the headset's hardware decoder; each frame
+  is sampled straight from the decoder's buffer and converted in one GPU
+  pass (~0.5 ms) as soon as it's decoded, into an image that every panel
+  shows its own region of. The panels are OpenXR cylinder layers, which
+  SteamVR composites itself at display time, so head movement stays smooth
+  at 144 Hz whatever the stream does. The controllers drive the PC's mouse
+  through a laser pointer, or act as an Xbox controller; mouse and keyboard
+  on the PC keep working too.
 
 ## Requirements
 
@@ -126,29 +134,51 @@ git clone https://github.com/TylerK26/framewall.git ~/src/framewall
 ~/src/framewall/vr/build.sh
 ```
 
-That downloads its two dependencies (moonlight-common-c and the OpenVR SDK),
+That downloads its dependencies (moonlight-common-c and the OpenXR SDK),
 builds it, installs it to `~/.local/opt/framewall-vr` and the launcher to
-`~/framewall-vr`. Add `~/framewall-vr` to Steam as a non-Steam game with the
-**Gamepad** controller layout, and launch it from Steam. It picks the host's
-side-by-side (`row`) preset matching the headset's refresh rate.
+`~/framewall-vr`. Add `~/framewall-vr` to Steam as a non-Steam game and launch
+it from Steam. It picks the host's side-by-side (`row`) preset matching the
+headset's refresh rate.
 
-- A small status window appears too: Steam only gives controller input to the
-  focused window of the game it launched, so select it if the controllers
-  don't reach the PC. Closing it stops the stream.
-- Recenter in SteamVR to bring the panels in front of you.
+- **Refresh rate:** SteamVR starts a new app at 72 Hz. In SteamVR's video
+  settings, set framewall-vr's refresh rate to what you want (144 Hz works
+  smoothly on the Steam Frame), and make sure the host has a `row` preset at
+  that rate (`config.example` has 90, 108, 120 and 144).
+- **Controllers:**
+
+  | Input | Does |
+  |---|---|
+  | Grip (one controller) | Laser on, on that controller; again on the same controller turns it off |
+  | Trigger (light pull) or bumper | Left click (on the laser's controller) |
+  | Thumbstick click | Right click |
+  | Thumbstick | Scroll |
+  | Both grips together | Open / close the menu |
+
+  With the laser off and the menu closed, the controllers are an **Xbox
+  controller** on the PC (sticks, triggers, bumpers, stick clicks, A/B/X/Y,
+  d-pad, menu = Start, view = Back), with rumble. The grips never reach the
+  PC. While the laser is on or the menu is open, the gamepad is released.
+- **Menu** (both grips): passthrough on/off (remembered), recenter the panels
+  in front of you, all panels smaller / bigger, quit (pull twice), and the
+  stream's frame rate, latency and connection. While it's open, nothing
+  reaches the PC.
+- **Passthrough** uses OpenXR's own blend mode (`ALPHA_BLEND`): SteamVR shows
+  your room through the app with whatever camera source it uses.
 - **Panel sizes and placement:** run `framewall-panels` on the PC while
   streaming (see below). It's a small window with a slider for each panel's
   size, plus distance, height and the gap between panels. The window is on
   your PC's screen, so you can see it in the headset and drag the sliders with
-  the PC's mouse; the panels change as you drag, and the other panels move to
-  make room. framewall-vr saves the values on the headset, in
+  the laser or the PC's mouse; the panels change as you drag, and the other
+  panels move to make room. framewall-vr saves the values on the headset, in
   `~/.config/framewall-vr.conf`.
 - That file (created on the first run) can also be edited by hand: save it and
   the panels change right away. It has the stream settings too (preset,
-  bitrate, audio), which apply on the next start; see
+  bitrate, audio, passthrough), which apply on the next start; see
   `client/framewall-vr.conf.example`.
 - `~/framewall-vr --list` lists the host's presets, `~/framewall-vr --quit`
-  closes a wall left running. The log is `~/.cache/framewall-vr.log`.
+  closes a wall left running. The log is `~/.cache/framewall-vr.log`; every
+  5 s it shows the headset's and the video's frame rates, missed frames and
+  the decoded-to-on-screen time.
 
 To install `framewall-panels` on the PC (it needs PySide6 or PyQt6, e.g.
 `python-pyqt6` on Arch):
@@ -172,6 +202,8 @@ Host (`~/.config/framewall/config`, see `host/config.example`):
 | `PRESETS` | One line per wall: `"COUNT WIDTHxHEIGHT REFRESH LAYOUT"`, e.g. `"2 1920x1080 108 top"` |
 | `PHYSICAL` | Physical screens in the wall: `all` (default), `primary`, a list of output names, or `none`. Screens left out keep working where they are. |
 | `ENCODER` / `ADAPTER` | Sunshine encoder (`vaapi`, `nvenc`, …) and GPU render node |
+| `VAAPI_QUALITY` | VA-API encoder preset: `speed` (default; the fastest, which 144 Hz walls need), `balanced`, `quality`, `auto` |
+| `FEC_PERCENT` | Error correction share of the stream (Sunshine's default is 20); more rides out bigger bursts of Wi-Fi loss |
 | `PORT` | Sunshine base port (separate from a normal Sunshine on 47989) |
 | `NAME` | Host name shown in Moonlight |
 
@@ -196,8 +228,8 @@ Client (`~/.config/framewall.conf` on the headset): `HOST`, `APP`,
 
 VR client (`~/.config/framewall-vr.conf` on the headset): `SIZE`,
 `SCREENS_SIZE`, `VIRTUAL1_SIZE`, `VIRTUAL2_SIZE`, ..., `DISTANCE`, `HEIGHT`,
-`GAP` (applied live), and `APP`, `BITRATE_KBPS`, `AUDIO`, `HOST`,
-`QUIT_ON_EXIT` (applied on the next start).
+`GAP` (applied live), `PASSTHROUGH` (also in the menu), and `APP`,
+`BITRATE_KBPS`, `AUDIO`, `HOST`, `QUIT_ON_EXIT` (applied on the next start).
 
 ## Tips
 
@@ -205,9 +237,14 @@ VR client (`~/.config/framewall-vr.conf` on the headset): `SIZE`,
   wall (see Setup). Too small scales the wall down; much larger costs headset
   GPU time.
 - **Match the refresh rate to the headset.** If a preset's rate is higher than
-  the headset's, the headset GPU decodes frames it never shows, and head
-  movement can stutter. On the Steam Frame, 108 Hz with a 108 Hz preset was the
-  sweet spot for a 3840×2280 wall. 144 Hz stuttered.
+  the headset's, the headset GPU decodes frames it never shows. With Moonlight
+  in theater mode on the Steam Frame, 108 Hz with a 108 Hz preset was the sweet
+  spot for a 3840×2280 wall (144 Hz stuttered). framewall-vr runs a 5760×1200
+  `row` wall smoothly at 144 Hz.
+- **Brief freezes with blocky images** come from bursts of Wi-Fi packet loss:
+  the picture waits for a new keyframe (Sunshine's VA-API encoder can't recover
+  any other way). Keep the headset close to the 6 GHz adapter, or try a higher
+  `FEC_PERCENT` or a lower `BITRATE_KBPS`.
 - **Sharper text:**
   - Use a larger theater screen.
   - Raise `BITRATE_KBPS` (e.g. `150000`).
