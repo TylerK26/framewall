@@ -53,6 +53,7 @@ public:
     XrSession session = XR_NULL_HANDLE;
     XrSpace space = XR_NULL_HANDLE;  // LOCAL
     int64_t color_format = 0;        // sRGB RGBA swapchain format
+    bool frame_controller = false;   // XR_VALVE_frame_controller_interaction enabled
 
     VkInstance vk_instance = VK_NULL_HANDLE;
     VkPhysicalDevice vk_phys = VK_NULL_HANDLE;

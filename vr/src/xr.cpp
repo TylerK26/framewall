@@ -52,9 +52,12 @@ bool Xr::init(std::string &err) {
             if (!std::strcmp(p.extensionName, XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME)) vk2 = true;
             if (!std::strcmp(p.extensionName, XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME)) cyl = true;
             if (!std::strcmp(p.extensionName, XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME)) have_refresh_ = true;
+            if (!std::strcmp(p.extensionName, "XR_VALVE_frame_controller_interaction")) frame_controller = true;
         }
         if (!vk2 || !cyl) { err = "the OpenXR runtime lacks Vulkan or cylinder layer support"; return false; }
         if (have_refresh_) exts.push_back(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME);
+        // The Steam Frame controller's own interaction profile.
+        if (frame_controller) exts.push_back("XR_VALVE_frame_controller_interaction");
     }
     XrInstanceCreateInfo ici{XR_TYPE_INSTANCE_CREATE_INFO};
     std::snprintf(ici.applicationInfo.applicationName, XR_MAX_APPLICATION_NAME_SIZE, "framewall");

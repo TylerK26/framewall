@@ -15,6 +15,10 @@
 //   options: --host NAME  --bitrate KBPS  --seconds N  --no-audio  --no-quit
 //            --passthrough (the room instead of the void)
 //
+// Controllers (see pointer.h): press a grip to put the laser on that
+// controller; trigger = left click, grip + trigger = right click, stick =
+// scroll. Both grips together are reserved for a menu.
+//
 // Settings: ~/.config/framewall-vr.conf (KEY=VALUE, see framewall-vr.conf.example),
 // created on the first run. Panel sizes and placement apply as soon as the file
 // is saved, while streaming, or live from the panel editor on the PC
@@ -27,6 +31,7 @@
 #include "log.h"
 #include "moonlight_conf.h"
 #include "nvhttp.h"
+#include "pointer.h"
 #include "settings.h"
 #include "video.h"
 #include "wallrender.h"
@@ -281,6 +286,19 @@ int main(int argc, char **argv) {
 
     WallRenderer renderer(xr);
     if (!renderer.init(wall.width, wall.height, err)) { fwlog("wall: %s", err.c_str()); return 1; }
+    Pointer pointer(xr);
+    if (!pointer.init(err)) { fwlog("pointer: %s", err.c_str()); return 1; }
+    // Absolute positions in the wall stream: Sunshine maps them onto the
+    // captured region, so the PC's cursor lands under the laser's dot.
+    const Pointer::Mouse mouse{
+        [&](int x, int y) { LiSendMousePositionEvent(short(x), short(y), short(wall.width), short(wall.height)); },
+        [](bool right, bool down) {
+            LiSendMouseButtonEvent(down ? BUTTON_ACTION_PRESS : BUTTON_ACTION_RELEASE, right ? BUTTON_RIGHT : BUTTON_LEFT);
+        },
+        [](int vertical, int horizontal) {
+            if (vertical) LiSendHighResScrollEvent(short(vertical));
+            if (horizontal) LiSendHighResHScrollEvent(short(horizontal));
+        }};
     VideoPipeline video(VideoPipeline::Options{});
     g_video = &video;
 
@@ -422,12 +440,16 @@ int main(int argc, char **argv) {
         XrFrameState fs{XR_TYPE_FRAME_STATE};
         if (XR_FAILED(xrWaitFrame(xr.session, nullptr, &fs))) { usleep(10000); continue; }
         stats.frame(fs);
+        pointer.update(fs.predictedDisplayTime, poses, regions, s.place.radius, mouse);
         XrResult r;
         {
             std::lock_guard<std::mutex> lk(xr.queue_mu);
             xrBeginFrame(xr.session, nullptr);
             layers.clear();
-            if (fs.shouldRender) renderer.layers(fs.predictedDisplayTime, passthrough, poses, regions, s.place.radius, layers);
+            if (fs.shouldRender) {
+                renderer.layers(fs.predictedDisplayTime, passthrough, poses, regions, s.place.radius, layers);
+                pointer.layers(layers);
+            }
             XrFrameEndInfo fe{XR_TYPE_FRAME_END_INFO};
             fe.displayTime = fs.predictedDisplayTime;
             fe.environmentBlendMode = blend;
