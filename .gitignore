@@ -5,3 +5,4 @@ vr/compile_commands.json
 __pycache__/
 vr/spike/build/
 vr/spike/build-*/
+vr/dist/

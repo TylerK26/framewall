@@ -104,18 +104,28 @@ That's all Moonlight is needed for: framewall-vr streams on its own.
 
 ### 4. Headset: framewall-vr
 
-On the headset (Desktop mode or SSH):
+On the headset (Desktop mode or SSH), download
+`framewall-vr-VERSION-steamos-aarch64.tar.gz` from the
+[latest release](https://github.com/TylerK26/framewall/releases/latest) and
+run its installer:
+
+```sh
+tar xf framewall-vr-*-steamos-aarch64.tar.gz
+./framewall-vr-*-steamos-aarch64/install.sh
+```
+
+Or build it from source instead:
 
 ```sh
 git clone https://github.com/TylerK26/framewall.git ~/src/framewall
 ~/src/framewall/vr/build.sh
 ```
 
-That downloads its dependencies (moonlight-common-c and the OpenXR SDK),
-builds it, installs it to `~/.local/opt/framewall-vr` and the launcher to
-`~/framewall-vr`. In desktop mode, right click `~/framewall-vr` (click the
-thumbstick) and click "Add to Steam", then launch it from Steam. It picks the
-host's preset matching the headset's refresh rate.
+That downloads its dependencies (moonlight-common-c and the OpenXR SDK) and
+builds it. Either way it's installed to `~/.local/opt/framewall-vr` with the
+launcher at `~/framewall-vr`. In desktop mode, right click `~/framewall-vr`
+(click the thumbstick) and click "Add to Steam", then launch it from Steam.
+It picks the host's preset matching the headset's refresh rate.
 
 - **Refresh rate:** SteamVR starts a new app at 72 Hz. In SteamVR's video
   settings, set framewall-vr's refresh rate to what you want (144 Hz works
@@ -159,7 +169,13 @@ host's preset matching the headset's refresh rate.
   5 s it shows the headset's and the video's frame rates, missed frames and
   the decoded-to-on-screen time.
 
-To update later: `git -C ~/src/framewall pull && ~/src/framewall/vr/build.sh`.
+To update later: extract a newer release and run its `install.sh`, or, from
+source, `git -C ~/src/framewall pull && ~/src/framewall/vr/build.sh`. Your
+settings are kept either way.
+
+To make a release tarball, run `vr/package.sh --version vX.Y.Z` on the
+headset from a clean checkout; it writes the tarball and its checksum to
+`vr/dist/`.
 
 ### 5. Host: the panel editor (optional)
 
