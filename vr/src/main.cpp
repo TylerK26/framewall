@@ -15,9 +15,10 @@
 //   options: --host NAME  --bitrate KBPS  --seconds N  --no-audio  --no-quit
 //            --passthrough (the room instead of the void)
 //
-// Controllers (see pointer.h): press a grip to put the laser on that
-// controller; trigger = left click, grip + trigger = right click, stick =
-// scroll. Both grips together are reserved for a menu.
+// Controllers (see pointer.h): a grip toggles the laser on that controller;
+// trigger or bumper = left click, stick click = right click, stick = scroll.
+// Both grips together open the menu (menu.h): passthrough, recenter, panel
+// size, stream info, quit.
 //
 // Settings: ~/.config/framewall-vr.conf (KEY=VALUE, see framewall-vr.conf.example),
 // created on the first run. Panel sizes and placement apply as soon as the file
@@ -29,6 +30,7 @@
 #include "control.h"
 #include "layout.h"
 #include "log.h"
+#include "menu.h"
 #include "moonlight_conf.h"
 #include "nvhttp.h"
 #include "pointer.h"
@@ -62,6 +64,7 @@ using clk = std::chrono::steady_clock;
 
 std::atomic<bool> g_stop{false};
 std::atomic<int> g_terminated{1};  // 1 = still running, else the error code
+std::atomic<bool> g_poor{false};   // the connection is losing packets
 VideoPipeline *g_video = nullptr;
 
 uint64_t now_ms() {
@@ -187,7 +190,10 @@ void cl_log(const char *fmt, ...) {
     while (n && (buf[n - 1] == '\n' || buf[n - 1] == '\r')) buf[--n] = 0;
     fwlog("moonlight: %s", buf);
 }
-void cl_status(int status) { fwlog("connection: %s", status == CONN_STATUS_POOR ? "poor (packet loss or high latency)" : "okay"); }
+void cl_status(int status) {
+    g_poor = status == CONN_STATUS_POOR;
+    fwlog("connection: %s", status == CONN_STATUS_POOR ? "poor (packet loss or high latency)" : "okay");
+}
 
 void on_signal(int) { g_stop = true; }
 
@@ -197,6 +203,8 @@ struct FrameStats {
     double gpu_sum = 0, gpu_max = 0, lat_sum = 0;
     XrTime last_display = 0;
     clk::time_point since = clk::now();
+    // The last logged interval, for the menu.
+    struct Last { double fps = 0, shown = 0, latency = 0; uint64_t missed = 0; } last;
 
     void frame(const XrFrameState &fs) {
         frames++;
@@ -220,8 +228,10 @@ struct FrameStats {
               (unsigned long long)v.stats.decoded.load(), (unsigned long long)v.stats.errors.load(),
               (unsigned long long)v.stats.dropped.load());
         const XrTime keep = last_display;
+        const Last l{frames / secs, converted / secs, converted ? lat_sum / converted : 0.0, missed};
         *this = FrameStats{};
         last_display = keep;
+        last = l;
     }
 };
 
@@ -233,6 +243,7 @@ int main(int argc, char **argv) {
     load_settings(s);
     bool passthrough = false;
     if (!parse_args(argc, argv, s, passthrough)) return 2;
+    passthrough = passthrough || s.passthrough;
     std::signal(SIGINT, on_signal);
     std::signal(SIGTERM, on_signal);
     std::signal(SIGHUP, on_signal);
@@ -288,6 +299,8 @@ int main(int argc, char **argv) {
     if (!renderer.init(wall.width, wall.height, err)) { fwlog("wall: %s", err.c_str()); return 1; }
     Pointer pointer(xr);
     if (!pointer.init(err)) { fwlog("pointer: %s", err.c_str()); return 1; }
+    Menu menu(xr);
+    if (!menu.init(err)) { fwlog("menu: %s", err.c_str()); return 1; }
     // Absolute positions in the wall stream: Sunshine maps them onto the
     // captured region, so the PC's cursor lands under the laser's dot.
     const Pointer::Mouse mouse{
@@ -393,7 +406,7 @@ int main(int argc, char **argv) {
     bool exit_requested = false;
     FrameStats stats;
     std::vector<XrCompositionLayerBaseHeader *> layers;
-    const XrEnvironmentBlendMode blend = passthrough ? XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND : XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+    uint64_t last_info = 0;
     while (xr.poll()) {
         if (g_stop && !exit_requested) {
             exit_requested = true;
@@ -440,7 +453,60 @@ int main(int argc, char **argv) {
         XrFrameState fs{XR_TYPE_FRAME_STATE};
         if (XR_FAILED(xrWaitFrame(xr.session, nullptr, &fs))) { usleep(10000); continue; }
         stats.frame(fs);
-        pointer.update(fs.predictedDisplayTime, poses, regions, s.place.radius, mouse);
+        if (pointer.update(fs.predictedDisplayTime, poses, regions, s.place.radius, mouse, menu)) {
+            if (menu.is_open()) menu.close();
+            else { menu.open(fs.predictedDisplayTime); last_info = 0; }
+        }
+        const Menu::Action act = menu.take_action();
+        switch (act) {
+        case Menu::Action::TogglePassthrough:
+            if (xr.passthrough_supported()) {
+                passthrough = !passthrough;
+                s.passthrough = passthrough;
+                save_settings({{"PASSTHROUGH", passthrough ? "1" : "0"}});
+                conf_mtime = settings_mtime();  // our own write: no reload
+                fwlog("menu: passthrough %s", passthrough ? "on" : "off");
+            }
+            break;
+        case Menu::Action::Recenter:
+            xr.recenter(fs.predictedDisplayTime);
+            menu.close();
+            break;
+        case Menu::Action::Smaller:
+        case Menu::Action::Bigger: {
+            // Every panel at once, 10% a step; saved like the PC editor's changes.
+            const float size = std::clamp(s.size * (act == Menu::Action::Bigger ? 1.1f : 1 / 1.1f), 0.3f, 3.0f);
+            char v[16];
+            std::snprintf(v, sizeof v, "%.2f", size);
+            if (set_panel_setting(s, "SIZE", v)) {
+                unsaved["SIZE"] = v;
+                last_edit = now_ms();
+                poses = place(wall, s);
+                editor.send(editor_snapshot(app->title, wall, s));
+                last_info = 0;
+            }
+            break;
+        }
+        case Menu::Action::Quit:
+            fwlog("menu: quit");
+            menu.close();
+            g_stop = true;
+            break;
+        case Menu::Action::Close: menu.close(); break;
+        case Menu::Action::None: break;
+        }
+        if (menu.is_open() && now_ms() - last_info > 500) {
+            last_info = now_ms();
+            char l1[64], l2[64], l3[64], l4[64];
+            std::snprintf(l1, sizeof l1, "Wall %dx%d @ %d Hz", wall.width, wall.height, wall.hz);
+            std::snprintf(l2, sizeof l2, "Video %.0f fps, headset %.0f fps", stats.last.shown, stats.last.fps);
+            std::snprintf(l3, sizeof l3, "Decoded->wall %.1f ms, missed %llu", stats.last.latency,
+                          (unsigned long long)stats.last.missed);
+            std::snprintf(l4, sizeof l4, "Network %s, %d Mbps", g_poor ? "POOR (packet loss)" : "ok", sc.bitrate / 1000);
+            menu.set_state(passthrough, s.size, {l1, l2, l3, l4});
+        }
+        menu.prepare();
+        const XrEnvironmentBlendMode blend = passthrough ? XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND : XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
         XrResult r;
         {
             std::lock_guard<std::mutex> lk(xr.queue_mu);
@@ -448,6 +514,7 @@ int main(int argc, char **argv) {
             layers.clear();
             if (fs.shouldRender) {
                 renderer.layers(fs.predictedDisplayTime, passthrough, poses, regions, s.place.radius, layers);
+                menu.layers(layers);
                 pointer.layers(layers);
             }
             XrFrameEndInfo fe{XR_TYPE_FRAME_END_INFO};

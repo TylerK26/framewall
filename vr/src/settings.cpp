@@ -87,6 +87,7 @@ void load_settings(Settings &s) {
         else if (k == "BITRATE_KBPS") s.bitrate_kbps = std::atoi(v.c_str());
         else if (k == "AUDIO") s.audio = v != "0";
         else if (k == "QUIT_ON_EXIT") s.quit_on_exit = v != "0";
+        else if (k == "PASSTHROUGH") s.passthrough = v == "1";
         else if (k == "SIZE" || k == "DISTANCE" || k == "HEIGHT" || k == "GAP" || ends_with(k, "_SIZE")) {
             if (!set_panel_setting(s, k, v)) fwlog("settings: ignoring %s=%s", k.c_str(), v.c_str());
         } else if (!k.empty()) fwlog("settings: unknown key %s", k.c_str());

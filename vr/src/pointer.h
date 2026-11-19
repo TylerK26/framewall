@@ -2,7 +2,8 @@
 //
 //   - The laser starts off. A controller's grip toggles it: on that controller
 //     (moving it from the other one), or off if it's already there.
-//   - Both grips together are reserved for the menu (nothing yet).
+//   - Both grips together open/close the menu (see menu.h); while it's open,
+//     both controllers point at it and nothing reaches the PC.
 //   - The laser controller's trigger (a light pull) or bumper is the left
 //     button, its thumbstick click the right button; the thumbstick scrolls.
 //
@@ -16,6 +17,7 @@
 #pragma once
 
 #include "layout.h"
+#include "menu.h"
 #include "xr.h"
 
 #include <cstdint>
@@ -38,14 +40,13 @@ public:
     // Actions, bindings and the pointer images. Call before the session runs.
     bool init(std::string &err);
 
-    // Once per display frame (any session state; only acts while focused).
-    // `poses`/`regions`: the panels on the cylinder of `radius` and their
-    // rectangles in the stream.
-    void update(XrTime t, const std::vector<PanelPose> &poses, const std::vector<Rect> &regions, float radius,
-                const Mouse &mouse);
+    // Once per display frame (only acts while focused). `poses`/`regions`:
+    // the panels on the cylinder of `radius` and their rectangles in the
+    // stream. Returns true when both grips were pressed together (the menu).
+    bool update(XrTime t, const std::vector<PanelPose> &poses, const std::vector<Rect> &regions, float radius,
+                const Mouse &mouse, Menu &menu);
 
-    // Appends the ray and dot layers (if the laser is on), valid until the
-    // next call.
+    // Appends the ray(s) and dot, valid until the next call.
     void layers(std::vector<XrCompositionLayerBaseHeader *> &out);
 
 private:
@@ -54,13 +55,13 @@ private:
         XrSpace aim = XR_NULL_HANDLE;
         bool grip = false, left = false, right = false;  // as of the last frame
         uint64_t grip_down_ms = 0;  // grip press waiting out the chord window (0 = none)
-        XrPosef pose{};
         bool pose_valid = false;
+        XrVector3f origin{}, dir{}, end{};  // the ray this frame
+        bool ray = false;                    // drawn this frame
     };
 
     bool make_actions(std::string &err);
     bool make_images(std::string &err);
-    bool upload(Xr::Swapchain &sc, const std::vector<uint32_t> &rgba, std::string &err);
     void suggest(const char *profile, const std::vector<std::pair<XrAction, std::vector<std::string>>> &candidates);
     void release_buttons(const Mouse &mouse);
     void haptic(int hand);
@@ -75,12 +76,13 @@ private:
     int laser_ = -1;              // hand with the laser, -1 = off
     bool held_[2] = {false, false};  // left, right button down on the PC
     bool trigger_down_[2] = {false, false};
-    bool hit_ = false;
-    XrVector3f origin_{}, end_{}, hit_point_{}, head_{};
-    float hit_angle_ = 0;
+    XrVector3f head_{};
+    bool dot_ = false;
+    XrVector3f dot_pos_{};
+    XrQuaternionf dot_rot_{0, 0, 0, 1};
     int last_x_ = -1, last_y_ = -1;
     double scroll_acc_[2] = {0, 0};
 
     Xr::Swapchain dot_img_, ray_img_;
-    XrCompositionLayerQuad ray_{XR_TYPE_COMPOSITION_LAYER_QUAD}, dot_{XR_TYPE_COMPOSITION_LAYER_QUAD};
+    XrCompositionLayerQuad ray_layers_[2], dot_layer_{XR_TYPE_COMPOSITION_LAYER_QUAD};
 };

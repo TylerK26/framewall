@@ -49,6 +49,7 @@ WallRenderer::~WallRenderer() {
     for (auto v : wall_views_) vkDestroyImageView(d, v, nullptr);
     xr_.destroy_swapchain(wall_);
     for (auto &v : void_) xr_.destroy_swapchain(v);
+    for (auto &v : clear_) xr_.destroy_swapchain(v);
     if (queries_) vkDestroyQueryPool(d, queries_, nullptr);
     if (fence_) vkDestroyFence(d, fence_, nullptr);
     if (cmd_pool_) vkDestroyCommandPool(d, cmd_pool_, nullptr);
@@ -249,7 +250,11 @@ bool WallRenderer::make_pipeline(std::string &err) {
 
 bool WallRenderer::make_void(std::string &err) {
     VkDevice d = xr_.vk_device;
-    for (auto &v : void_) {
+    static constexpr VkClearColorValue kClear = {{0, 0, 0, 0}};
+    Xr::Swapchain *all[4] = {&void_[0], &void_[1], &clear_[0], &clear_[1]};
+    for (int k = 0; k < 4; k++) {
+        Xr::Swapchain &v = *all[k];
+        const VkClearColorValue &colour = k < 2 ? kVoidColor : kClear;
         if (!xr_.make_swapchain(kVoidSize, kVoidSize, XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT, true, v, err))
             return false;
         uint32_t idx = 0;
@@ -269,7 +274,7 @@ bool WallRenderer::make_void(std::string &err) {
         b.image = v.images[idx];
         b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         vkCmdPipelineBarrier(cmd_, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
-        vkCmdClearColorImage(cmd_, v.images[idx], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &kVoidColor, 1, &b.subresourceRange);
+        vkCmdClearColorImage(cmd_, v.images[idx], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &colour, 1, &b.subresourceRange);
         b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         b.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
@@ -530,7 +535,7 @@ bool WallRenderer::convert(VideoPipeline &video, int idx, uint64_t gen, std::chr
 void WallRenderer::layers(XrTime display_time, bool passthrough, const std::vector<PanelPose> &poses,
                           const std::vector<Rect> &regions, float radius, std::vector<XrCompositionLayerBaseHeader *> &out) {
     out.clear();
-    if (!passthrough) {
+    {
         XrViewLocateInfo li{XR_TYPE_VIEW_LOCATE_INFO};
         li.viewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
         li.displayTime = display_time;
@@ -543,10 +548,11 @@ void WallRenderer::layers(XrTime display_time, bool passthrough, const std::vect
                 proj_views_[e] = {XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW};
                 proj_views_[e].pose = views[e].pose;
                 proj_views_[e].fov = views[e].fov;
-                proj_views_[e].subImage.swapchain = void_[e].handle;
+                proj_views_[e].subImage.swapchain = passthrough ? clear_[e].handle : void_[e].handle;
                 proj_views_[e].subImage.imageRect = {{0, 0}, {kVoidSize, kVoidSize}};
             }
             proj_ = {XR_TYPE_COMPOSITION_LAYER_PROJECTION};
+            proj_.layerFlags = passthrough ? XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT : 0;
             proj_.space = xr_.space;
             proj_.viewCount = 2;
             proj_.views = proj_views_;

@@ -53,6 +53,7 @@ add_executable(framewall-vr
   src/audio.cpp
   src/control.cpp
   src/layout.cpp
+  src/menu.cpp
   src/moonlight_conf.cpp
   src/nvhttp.cpp
   src/pointer.cpp

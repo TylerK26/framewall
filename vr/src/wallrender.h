@@ -4,8 +4,9 @@
 // SteamVR composites the cylinders itself (high-quality filtering, placed at
 // display time, so head motion stays smooth whatever the stream does).
 //
-// Behind them: a dark void (a static projection layer) or, with passthrough,
-// nothing (the room shows through).
+// Behind them, a static projection layer: the dark void, or, with
+// passthrough, fully transparent (alpha 0, blended with the environment), so
+// SteamVR shows the room through it (the OpenXR ALPHA_BLEND blend mode).
 //
 // Frames are converted on the renderer's own thread as soon as they are
 // decoded (start()/stop()); layers() is called from the frame loop.
@@ -90,8 +91,9 @@ private:
     std::vector<Imported> imports_;
     std::vector<bool> initialized_;
 
-    // The void: one static, single-colour image per eye.
-    Xr::Swapchain void_[2];
+    // The background: one static, single-colour image per eye, for the void
+    // and for passthrough (transparent).
+    Xr::Swapchain void_[2], clear_[2];
 
     XrCompositionLayerProjection proj_{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
     XrCompositionLayerProjectionView proj_views_[2];

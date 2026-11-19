@@ -200,88 +200,8 @@ bool Pointer::make_images(std::string &err) {
             ray[size_t(y) * kRayW + x] = rgba(0.85f, 0.92f, 1.0f, 0.7f * std::clamp(1.4f * (1 - d), 0.0f, 1.0f));
         }
     const XrSwapchainUsageFlags usage = XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
-    return xr_.make_swapchain(kDotPx, kDotPx, usage, true, dot_img_, err) && upload(dot_img_, dot, err) &&
-           xr_.make_swapchain(kRayW, kRayH, usage, true, ray_img_, err) && upload(ray_img_, ray, err);
-}
-
-bool Pointer::upload(Xr::Swapchain &sc, const std::vector<uint32_t> &rgba_px, std::string &err) {
-    VkDevice d = xr_.vk_device;
-    const VkDeviceSize bytes = rgba_px.size() * 4;
-    VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-    bci.size = bytes;
-    bci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-    VkBuffer buf;
-    if (vkCreateBuffer(d, &bci, nullptr, &buf) != VK_SUCCESS) { err = "pointer staging buffer"; return false; }
-    VkMemoryRequirements mr;
-    vkGetBufferMemoryRequirements(d, buf, &mr);
-    VkPhysicalDeviceMemoryProperties mp;
-    vkGetPhysicalDeviceMemoryProperties(xr_.vk_phys, &mp);
-    uint32_t type = 0;
-    for (uint32_t i = 0; i < mp.memoryTypeCount; i++)
-        if ((mr.memoryTypeBits & (1u << i)) &&
-            (mp.memoryTypes[i].propertyFlags & (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) ==
-                (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) { type = i; break; }
-    VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-    mai.allocationSize = mr.size;
-    mai.memoryTypeIndex = type;
-    VkDeviceMemory mem;
-    vkAllocateMemory(d, &mai, nullptr, &mem);
-    vkBindBufferMemory(d, buf, mem, 0);
-    void *map;
-    vkMapMemory(d, mem, 0, bytes, 0, &map);
-    std::memcpy(map, rgba_px.data(), bytes);
-    vkUnmapMemory(d, mem);
-
-    VkCommandPool pool;
-    VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
-    pci.queueFamilyIndex = xr_.vk_queue_family;
-    vkCreateCommandPool(d, &pci, nullptr, &pool);
-    VkCommandBuffer cmd;
-    VkCommandBufferAllocateInfo cai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-    cai.commandPool = pool;
-    cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    cai.commandBufferCount = 1;
-    vkAllocateCommandBuffers(d, &cai, &cmd);
-
-    std::lock_guard<std::mutex> lk(xr_.queue_mu);
-    uint32_t idx = 0;
-    XrSwapchainImageAcquireInfo ai{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
-    xrAcquireSwapchainImage(sc.handle, &ai, &idx);
-    XrSwapchainImageWaitInfo wi{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
-    wi.timeout = XR_INFINITE_DURATION;
-    xrWaitSwapchainImage(sc.handle, &wi);
-    VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    vkBeginCommandBuffer(cmd, &bi);
-    VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-    b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    b.image = sc.images[idx];
-    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
-    VkBufferImageCopy c{};
-    c.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    c.imageExtent = {uint32_t(sc.width), uint32_t(sc.height), 1};
-    vkCmdCopyBufferToImage(cmd, buf, sc.images[idx], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &c);
-    b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    b.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    b.dstAccessMask = 0;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
-    vkEndCommandBuffer(cmd);
-    VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
-    si.commandBufferCount = 1;
-    si.pCommandBuffers = &cmd;
-    vkQueueSubmit(xr_.vk_queue, 1, &si, VK_NULL_HANDLE);
-    vkQueueWaitIdle(xr_.vk_queue);
-    XrSwapchainImageReleaseInfo ri{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
-    xrReleaseSwapchainImage(sc.handle, &ri);
-    vkDestroyCommandPool(d, pool, nullptr);
-    vkDestroyBuffer(d, buf, nullptr);
-    vkFreeMemory(d, mem, nullptr);
-    return true;
+    return xr_.make_swapchain(kDotPx, kDotPx, usage, true, dot_img_, err) && xr_.upload_image(dot_img_, dot.data(), err) &&
+           xr_.make_swapchain(kRayW, kRayH, usage, true, ray_img_, err) && xr_.upload_image(ray_img_, ray.data(), err);
 }
 
 void Pointer::haptic(int hand) {
@@ -301,19 +221,20 @@ void Pointer::release_buttons(const Mouse &mouse) {
     held_[0] = held_[1] = false;
 }
 
-void Pointer::update(XrTime t, const std::vector<PanelPose> &poses, const std::vector<Rect> &regions, float radius,
-                     const Mouse &mouse) {
-    hit_ = false;
+bool Pointer::update(XrTime t, const std::vector<PanelPose> &poses, const std::vector<Rect> &regions, float radius,
+                     const Mouse &mouse, Menu &menu) {
+    dot_ = false;
+    for (auto &h : hands_) h.ray = false;
     if (!xr_.focused()) {  // the Steam menu or another app has the controllers
         release_buttons(mouse);
         for (auto &h : hands_) h.grip = h.left = h.right = false, h.grip_down_ms = 0;
-        return;
+        return false;
     }
     XrActiveActionSet active{set_, XR_NULL_PATH};
     XrActionsSyncInfo sync{XR_TYPE_ACTIONS_SYNC_INFO};
     sync.countActiveActionSets = 1;
     sync.activeActionSets = &active;
-    if (XR_FAILED(xrSyncActions(xr_.session, &sync))) return;
+    if (XR_FAILED(xrSyncActions(xr_.session, &sync))) return false;
 
     const uint64_t now = now_ms();
     bool grip_now[2], left_now[2], right_now[2];
@@ -322,21 +243,15 @@ void Pointer::update(XrTime t, const std::vector<PanelPose> &poses, const std::v
         Hand &h = hands_[i];
         XrActionStateGetInfo gi{XR_TYPE_ACTION_STATE_GET_INFO};
         gi.subactionPath = h.path;
-        XrActionStateBoolean b{XR_TYPE_ACTION_STATE_BOOLEAN};
-        gi.action = grip_;
-        xrGetActionStateBoolean(xr_.session, &gi, &b);
-        grip_now[i] = b.isActive && b.currentState;
-        bool bumper = false;
-        {
-            XrActionStateBoolean bb{XR_TYPE_ACTION_STATE_BOOLEAN};
-            gi.action = bumper_;
-            xrGetActionStateBoolean(xr_.session, &gi, &bb);
-            bumper = bb.isActive && bb.currentState;
-            bb = {XR_TYPE_ACTION_STATE_BOOLEAN};
-            gi.action = right_;
-            xrGetActionStateBoolean(xr_.session, &gi, &bb);
-            right_now[i] = bb.isActive && bb.currentState;
-        }
+        auto boolean = [&](XrAction a) {
+            XrActionStateBoolean b{XR_TYPE_ACTION_STATE_BOOLEAN};
+            gi.action = a;
+            xrGetActionStateBoolean(xr_.session, &gi, &b);
+            return b.isActive && b.currentState;
+        };
+        grip_now[i] = boolean(grip_);
+        const bool bumper = boolean(bumper_);
+        right_now[i] = boolean(right_);
         // Trigger: analog, with hysteresis, so a light pull clicks.
         XrActionStateFloat f{XR_TYPE_ACTION_STATE_FLOAT};
         gi.action = trigger_;
@@ -352,57 +267,92 @@ void Pointer::update(XrTime t, const std::vector<PanelPose> &poses, const std::v
         h.pose_valid = XR_SUCCEEDED(xrLocateSpace(h.aim, xr_.space, t, &loc)) &&
                        (loc.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) &&
                        (loc.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT);
-        if (h.pose_valid) h.pose = loc.pose;
+        if (h.pose_valid) {
+            h.origin = loc.pose.position;
+            h.dir = normalize(rotate(loc.pose.orientation, {0, 0, -1}));
+        }
     }
+    XrSpaceLocation hl{XR_TYPE_SPACE_LOCATION};
+    if (view_ && XR_SUCCEEDED(xrLocateSpace(view_, xr_.space, t, &hl)) && (hl.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT))
+        head_ = hl.pose.position;
+    auto latch = [&] {
+        for (int i = 0; i < 2; i++) hands_[i].left = left_now[i], hands_[i].right = right_now[i];
+    };
 
-    // Grips: a press moves the laser to that hand, unless the other grip goes
-    // down within kChordMs (both grips = the menu, reserved for now).
+    // Grips: both together (within kChordMs) = the menu; one alone, once the
+    // window has passed, toggles the laser on that controller.
+    bool chord = false;
     for (int i = 0; i < 2; i++) {
         Hand &h = hands_[i], &o = hands_[1 - i];
         if (grip_now[i] && !h.grip) {
             if (o.grip_down_ms && now - o.grip_down_ms < kChordMs) {
-                o.grip_down_ms = 0;  // chord: neither press counts
-                fwlog("pointer: both grips (menu: not yet)");
+                o.grip_down_ms = 0;  // neither press counts on its own
+                chord = true;
             } else {
-                h.grip_down_ms = now;  // decided once the chord window has passed
+                h.grip_down_ms = now;
             }
         }
         h.grip = grip_now[i];
     }
-    // A grip press (no chord): the laser onto that controller, or off if it's
-    // already there.
+    if (chord) release_buttons(mouse);
     for (int i = 0; i < 2; i++) {
         Hand &h = hands_[i];
-        if (h.grip_down_ms && now - h.grip_down_ms >= kChordMs) {
-            h.grip_down_ms = 0;
-            release_buttons(mouse);
-            laser_ = laser_ == i ? -1 : i;
-            fwlog("pointer: laser %s", laser_ < 0 ? "off" : i == 0 ? "on the left controller" : "on the right controller");
-            haptic(i);
-        }
+        if (!h.grip_down_ms || now - h.grip_down_ms < kChordMs) continue;
+        h.grip_down_ms = 0;
+        if (menu.is_open()) continue;  // grips don't move the laser while the menu is up
+        release_buttons(mouse);
+        laser_ = laser_ == i ? -1 : i;
+        fwlog("pointer: laser %s", laser_ < 0 ? "off" : i == 0 ? "on the left controller" : "on the right controller");
+        haptic(i);
     }
-    // Buttons only count when pressed while the laser is on that controller.
-    auto latch = [&] {
-        for (int i = 0; i < 2; i++) hands_[i].left = left_now[i], hands_[i].right = right_now[i];
-    };
-    if (laser_ < 0) { latch(); return; }
+
+    // The menu: both controllers point; trigger or bumper picks. Nothing
+    // reaches the PC meanwhile.
+    if (menu.is_open() && !chord) {
+        release_buttons(mouse);
+        int hovering = -1;
+        float hu = -1, hv = -1;
+        for (int i = 0; i < 2; i++) {
+            Hand &h = hands_[i];
+            if (!h.pose_valid) continue;
+            float u, v, dist;
+            h.ray = true;
+            if (menu.hit(h.origin, h.dir, u, v, dist)) {
+                h.end = h.origin + h.dir * dist;
+                if (hovering < 0 || i == laser_) { hovering = i; hu = u; hv = v; }
+                if (left_now[i] && !h.left) menu.click(u, v);
+            } else {
+                h.end = h.origin + h.dir * kRayLength;
+            }
+        }
+        menu.hover(hovering >= 0 ? hu : -1, hv);
+        if (hovering >= 0) {
+            dot_ = true;
+            dot_pos_ = menu.point(hu, hv);
+            dot_rot_ = menu.orientation();
+        }
+        latch();
+        return chord;
+    }
+
+    if (laser_ < 0) { latch(); return chord; }
     Hand &h = hands_[laser_];
-    if (!h.pose_valid) { release_buttons(mouse); latch(); return; }
+    if (!h.pose_valid) { release_buttons(mouse); latch(); return chord; }
 
     // The ray, in the seated space, against the panels' cylinder (x² + z² = r²).
-    origin_ = h.pose.position;
-    const XrVector3f dir = normalize(rotate(h.pose.orientation, {0, 0, -1}));
-    end_ = origin_ + dir * kRayLength;
+    h.ray = true;
+    h.end = h.origin + h.dir * kRayLength;
+    const XrVector3f o = h.origin, dir = h.dir;
     const float a = dir.x * dir.x + dir.z * dir.z;
-    const float b = 2 * (origin_.x * dir.x + origin_.z * dir.z);
-    const float c = origin_.x * origin_.x + origin_.z * origin_.z - radius * radius;
+    const float b = 2 * (o.x * dir.x + o.z * dir.z);
+    const float c = o.x * o.x + o.z * o.z - radius * radius;
     const float disc = b * b - 4 * a * c;
     int panel = -1;
     float u = 0, v = 0;
     if (a > 1e-6f && disc >= 0) {
         const float tt = (-b + std::sqrt(disc)) / (2 * a);  // the far side: we're inside the cylinder
         if (tt > 0) {
-            const XrVector3f p = origin_ + dir * tt;
+            const XrVector3f p = o + dir * tt;
             const float ang = std::atan2(p.x, -p.z);  // + = right of forward
             for (size_t i = 0; i < poses.size() && i < regions.size(); i++) {
                 const float half = poses[i].width_m / radius / 2;
@@ -413,15 +363,17 @@ void Pointer::update(XrTime t, const std::vector<PanelPose> &poses, const std::v
                 panel = int(i);
                 u = (d + half) / (2 * half);
                 v = (poses[i].y + poses[i].height_m / 2 - p.y) / poses[i].height_m;
-                hit_point_ = p;
-                hit_angle_ = ang;
-                end_ = p;
+                h.end = p;
+                // The dot: on the panel, a few mm towards you, facing the axis.
+                dot_ = true;
+                dot_pos_ = p + XrVector3f{-std::sin(ang), 0, std::cos(ang)} * 0.005f;
+                dot_rot_ = {0, std::sin(-ang / 2), 0, std::cos(-ang / 2)};
                 break;
             }
         }
     }
-    hit_ = panel >= 0;
-    if (hit_) {
+    const bool hit = panel >= 0;
+    if (hit) {
         const Rect &r = regions[size_t(panel)];
         const int x = r.x + std::clamp(int(u * r.w), 0, r.w - 1), y = r.y + std::clamp(int(v * r.h), 0, r.h - 1);
         if (x != last_x_ || y != last_y_) {
@@ -435,19 +387,19 @@ void Pointer::update(XrTime t, const std::vector<PanelPose> &poses, const std::v
     // laser on a panel; a release always goes through.
     const bool now_down[2] = {left_now[laser_], right_now[laser_]};
     const bool was_down[2] = {h.left, h.right};
-    for (int b = 0; b < 2; b++) {
-        if (now_down[b] && !was_down[b] && hit_ && !held_[b]) {
-            held_[b] = true;
-            mouse.button(b == 1, true);
-        } else if (!now_down[b] && held_[b]) {
-            held_[b] = false;
-            mouse.button(b == 1, false);
+    for (int k = 0; k < 2; k++) {
+        if (now_down[k] && !was_down[k] && hit && !held_[k]) {
+            held_[k] = true;
+            mouse.button(k == 1, true);
+        } else if (!now_down[k] && held_[k]) {
+            held_[k] = false;
+            mouse.button(k == 1, false);
         }
     }
     latch();
 
     // Stick: scroll, faster the further it's pushed.
-    if (hit_) {
+    if (hit) {
         const float s[2] = {stick[laser_].y, stick[laser_].x};
         int out[2] = {0, 0};
         for (int k = 0; k < 2; k++) {
@@ -460,49 +412,45 @@ void Pointer::update(XrTime t, const std::vector<PanelPose> &poses, const std::v
         }
         if (out[0] || out[1]) mouse.scroll(out[0], out[1]);
     }
-
-    // Head position, to turn the ray's flat quad towards the eyes.
-    XrSpaceLocation hl{XR_TYPE_SPACE_LOCATION};
-    if (view_ && XR_SUCCEEDED(xrLocateSpace(view_, xr_.space, t, &hl)) && (hl.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT))
-        head_ = hl.pose.position;
+    return chord;
 }
 
 void Pointer::layers(std::vector<XrCompositionLayerBaseHeader *> &out) {
-    if (laser_ < 0 || !hands_[laser_].pose_valid) return;
-    // Ray: a thin quad from the controller to the hit, its long axis along
-    // the ray, its face turned to the head.
-    const XrVector3f along = end_ - origin_;
-    const float len = std::sqrt(dot(along, along));
-    if (len > 0.01f) {
+    // Rays: thin quads from the controller to where they end, the long axis
+    // along the ray, the face turned to the head.
+    for (int i = 0; i < 2; i++) {
+        const Hand &h = hands_[i];
+        if (!h.ray || !h.pose_valid) continue;
+        const XrVector3f along = h.end - h.origin;
+        const float len = std::sqrt(dot(along, along));
+        if (len < 0.01f) continue;
         const XrVector3f y = along * (1 / len);
-        const XrVector3f mid = origin_ + along * 0.5f;
+        const XrVector3f mid = h.origin + along * 0.5f;
         XrVector3f z = head_ - mid;
         z = normalize(z - y * dot(z, y));
         const XrVector3f x = cross(y, z);
-        ray_ = {XR_TYPE_COMPOSITION_LAYER_QUAD};
-        ray_.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
-        ray_.space = xr_.space;
-        ray_.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
-        ray_.subImage.swapchain = ray_img_.handle;
-        ray_.subImage.imageRect = {{0, 0}, {ray_img_.width, ray_img_.height}};
-        ray_.pose.orientation = from_axes(x, y, z);
-        ray_.pose.position = mid;
-        ray_.size = {kRayWidth, len};
-        out.push_back(reinterpret_cast<XrCompositionLayerBaseHeader *>(&ray_));
+        XrCompositionLayerQuad &q = ray_layers_[i];
+        q = {XR_TYPE_COMPOSITION_LAYER_QUAD};
+        q.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+        q.space = xr_.space;
+        q.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+        q.subImage.swapchain = ray_img_.handle;
+        q.subImage.imageRect = {{0, 0}, {ray_img_.width, ray_img_.height}};
+        q.pose.orientation = from_axes(x, y, z);
+        q.pose.position = mid;
+        q.size = {kRayWidth, len};
+        out.push_back(reinterpret_cast<XrCompositionLayerBaseHeader *>(&q));
     }
-    if (hit_) {
-        // Dot: on the panel, a few mm towards you, facing the cylinder's axis.
-        const XrVector3f inward{-std::sin(hit_angle_), 0, std::cos(hit_angle_)};
-        const float a = -hit_angle_;
-        dot_ = {XR_TYPE_COMPOSITION_LAYER_QUAD};
-        dot_.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
-        dot_.space = xr_.space;
-        dot_.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
-        dot_.subImage.swapchain = dot_img_.handle;
-        dot_.subImage.imageRect = {{0, 0}, {dot_img_.width, dot_img_.height}};
-        dot_.pose.orientation = {0, std::sin(a / 2), 0, std::cos(a / 2)};
-        dot_.pose.position = hit_point_ + inward * 0.005f;
-        dot_.size = {kDotSize, kDotSize};
-        out.push_back(reinterpret_cast<XrCompositionLayerBaseHeader *>(&dot_));
+    if (dot_) {
+        dot_layer_ = {XR_TYPE_COMPOSITION_LAYER_QUAD};
+        dot_layer_.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+        dot_layer_.space = xr_.space;
+        dot_layer_.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+        dot_layer_.subImage.swapchain = dot_img_.handle;
+        dot_layer_.subImage.imageRect = {{0, 0}, {dot_img_.width, dot_img_.height}};
+        dot_layer_.pose.orientation = dot_rot_;
+        dot_layer_.pose.position = dot_pos_;
+        dot_layer_.size = {kDotSize, kDotSize};
+        out.push_back(reinterpret_cast<XrCompositionLayerBaseHeader *>(&dot_layer_));
     }
 }

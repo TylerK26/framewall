@@ -3,6 +3,7 @@
 
 #include "log.h"
 
+#include <cmath>
 #include <cstring>
 
 namespace {
@@ -29,7 +30,9 @@ template <class T> T Xr::proc(const char *name) const {
 
 Xr::~Xr() {
     if (vk_device) vkDeviceWaitIdle(vk_device);
-    if (space) xrDestroySpace(space);
+    if (space && space != local_) xrDestroySpace(space);
+    if (local_) xrDestroySpace(local_);
+    if (view_) xrDestroySpace(view_);
     if (session) xrDestroySession(session);
     if (vk_device) vkDestroyDevice(vk_device, nullptr);
     if (instance) xrDestroyInstance(instance);
@@ -166,7 +169,10 @@ bool Xr::init(std::string &err) {
     XrReferenceSpaceCreateInfo rsci{XR_TYPE_REFERENCE_SPACE_CREATE_INFO};
     rsci.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL;
     rsci.poseInReferenceSpace.orientation.w = 1;
-    if (XR_FAILED(r = xrCreateReferenceSpace(session, &rsci, &space))) return fail("reference space", r);
+    if (XR_FAILED(r = xrCreateReferenceSpace(session, &rsci, &local_))) return fail("reference space", r);
+    space = local_;
+    rsci.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_VIEW;
+    xrCreateReferenceSpace(session, &rsci, &view_);
     {
         uint32_t n = 0;
         xrEnumerateSwapchainFormats(session, 0, &n, nullptr);
@@ -257,4 +263,108 @@ bool Xr::make_swapchain(int w, int h, XrSwapchainUsageFlags usage, bool static_i
 void Xr::destroy_swapchain(Swapchain &s) {
     if (s.handle) xrDestroySwapchain(s.handle);
     s = Swapchain{};
+}
+
+void Xr::recenter(XrTime t) {
+    XrSpaceLocation loc{XR_TYPE_SPACE_LOCATION};
+    if (XR_FAILED(xrLocateSpace(view_, local_, t, &loc)) || !(loc.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) ||
+        !(loc.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT))
+        return;
+    // Yaw of the head: where its -Z points, flattened.
+    const XrQuaternionf q = loc.pose.orientation;
+    const float fx = -2 * (q.x * q.z + q.w * q.y), fz = -(1 - 2 * (q.x * q.x + q.y * q.y));
+    const float yaw = std::atan2(-fx, -fz);
+    XrReferenceSpaceCreateInfo ci{XR_TYPE_REFERENCE_SPACE_CREATE_INFO};
+    ci.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL;
+    ci.poseInReferenceSpace.orientation = {0, std::sin(yaw / 2), 0, std::cos(yaw / 2)};
+    ci.poseInReferenceSpace.position = loc.pose.position;
+    XrSpace s;
+    if (XR_FAILED(xrCreateReferenceSpace(session, &ci, &s))) return;
+    if (space != local_) xrDestroySpace(space);
+    space = s;
+    fwlog("xr: recentred");
+}
+
+bool Xr::upload_image(Swapchain &sc, const uint32_t *rgba, std::string &err) {
+    VkDevice d = vk_device;
+    const VkDeviceSize bytes = VkDeviceSize(sc.width) * sc.height * 4;
+    VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bci.size = bytes;
+    bci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    VkBuffer buf;
+    if (vkCreateBuffer(d, &bci, nullptr, &buf) != VK_SUCCESS) { err = "staging buffer"; return false; }
+    VkMemoryRequirements mr;
+    vkGetBufferMemoryRequirements(d, buf, &mr);
+    VkPhysicalDeviceMemoryProperties mp;
+    vkGetPhysicalDeviceMemoryProperties(vk_phys, &mp);
+    const VkMemoryPropertyFlags want = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    uint32_t type = 0;
+    for (uint32_t i = 0; i < mp.memoryTypeCount; i++)
+        if ((mr.memoryTypeBits & (1u << i)) && (mp.memoryTypes[i].propertyFlags & want) == want) { type = i; break; }
+    VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    mai.allocationSize = mr.size;
+    mai.memoryTypeIndex = type;
+    VkDeviceMemory mem;
+    if (vkAllocateMemory(d, &mai, nullptr, &mem) != VK_SUCCESS) { vkDestroyBuffer(d, buf, nullptr); err = "staging memory"; return false; }
+    vkBindBufferMemory(d, buf, mem, 0);
+    void *map;
+    vkMapMemory(d, mem, 0, bytes, 0, &map);
+    std::memcpy(map, rgba, bytes);
+    vkUnmapMemory(d, mem);
+
+    VkCommandPool pool;
+    VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+    pci.queueFamilyIndex = vk_queue_family;
+    vkCreateCommandPool(d, &pci, nullptr, &pool);
+    VkCommandBuffer cmd;
+    VkCommandBufferAllocateInfo cai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    cai.commandPool = pool;
+    cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cai.commandBufferCount = 1;
+    vkAllocateCommandBuffers(d, &cai, &cmd);
+
+    bool ok = false;
+    {
+        std::lock_guard<std::mutex> lk(queue_mu);
+        uint32_t idx = 0;
+        XrSwapchainImageAcquireInfo ai{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
+        if (XR_SUCCEEDED(xrAcquireSwapchainImage(sc.handle, &ai, &idx))) {
+            XrSwapchainImageWaitInfo wi{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
+            wi.timeout = XR_INFINITE_DURATION;
+            xrWaitSwapchainImage(sc.handle, &wi);
+            VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+            bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+            vkBeginCommandBuffer(cmd, &bi);
+            VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+            b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b.image = sc.images[idx];
+            b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
+            VkBufferImageCopy c{};
+            c.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            c.imageExtent = {uint32_t(sc.width), uint32_t(sc.height), 1};
+            vkCmdCopyBufferToImage(cmd, buf, sc.images[idx], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &c);
+            b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            b.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;  // how OpenXR wants it back
+            b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            b.dstAccessMask = 0;
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
+            vkEndCommandBuffer(cmd);
+            VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+            si.commandBufferCount = 1;
+            si.pCommandBuffers = &cmd;
+            ok = vkQueueSubmit(vk_queue, 1, &si, VK_NULL_HANDLE) == VK_SUCCESS;
+            vkQueueWaitIdle(vk_queue);
+            XrSwapchainImageReleaseInfo ri{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
+            xrReleaseSwapchainImage(sc.handle, &ri);
+        }
+    }
+    vkDestroyCommandPool(d, pool, nullptr);
+    vkDestroyBuffer(d, buf, nullptr);
+    vkFreeMemory(d, mem, nullptr);
+    if (!ok) err = "image upload";
+    return ok;
 }

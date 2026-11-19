@@ -16,6 +16,7 @@ struct Settings {
     int bitrate_kbps = 0;  // 0 = automatic from the wall size
     bool audio = true;
     bool quit_on_exit = true;
+    bool passthrough = false;  // the room around the panels instead of the dark void
     int seconds = 0;       // stop after this long (testing)
     bool list = false;
     bool quit = false;     // just quit the wall on the host

@@ -23,3 +23,4 @@ BITRATE_KBPS=""   # empty = automatic; higher keeps text sharper while scrolling
 AUDIO=1           # 0 = no sound from the PC
 HOST=""           # framewall host as Moonlight names it; empty = the first one ending in " wall"
 QUIT_ON_EXIT=1    # 1 = closing framewall-vr removes the virtual monitors on the PC
+PASSTHROUGH=0     # 1 = your room around the panels instead of a dark void (also in the menu: both grips)

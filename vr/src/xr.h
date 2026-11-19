@@ -47,11 +47,18 @@ public:
     };
     bool make_swapchain(int w, int h, XrSwapchainUsageFlags usage, bool static_image, Swapchain &out, std::string &err);
     void destroy_swapchain(Swapchain &s);
+    // Copies RGBA8 pixels (sRGB, premultiplied alpha) into the swapchain's
+    // next image and releases it. Main thread, not inside a frame.
+    bool upload_image(Swapchain &s, const uint32_t *rgba, std::string &err);
+
+    // Moves `space` so its origin is the head now, facing where it looks
+    // (turned about the vertical axis only).
+    void recenter(XrTime t);
 
     XrInstance instance = XR_NULL_HANDLE;
     XrSystemId system = XR_NULL_SYSTEM_ID;
     XrSession session = XR_NULL_HANDLE;
-    XrSpace space = XR_NULL_HANDLE;  // LOCAL
+    XrSpace space = XR_NULL_HANDLE;  // where everything is placed: LOCAL, or recentred from it
     int64_t color_format = 0;        // sRGB RGBA swapchain format
     bool frame_controller = false;   // XR_VALVE_frame_controller_interaction enabled
 
@@ -70,6 +77,7 @@ public:
 private:
     template <class T> T proc(const char *name) const;
 
+    XrSpace local_ = XR_NULL_HANDLE, view_ = XR_NULL_HANDLE;
     XrSessionState state_ = XR_SESSION_STATE_UNKNOWN;
     std::atomic<bool> running_{false};
     bool exiting_ = false;
