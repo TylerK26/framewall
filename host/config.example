@@ -1,7 +1,7 @@
 # framewall host config: copy to ~/.config/framewall/config and edit.
 # After changing anything, run `framewall install` again (pairing is kept).
 
-# How this PC shows up in Moonlight.
+# How this PC shows up (in Moonlight, where you pair it, and in framewall-vr).
 NAME="$(hostname -s) wall"
 
 # Sunshine base port. framewall's Sunshine is separate from any normal
@@ -44,32 +44,18 @@ ADAPTER=/dev/dri/renderD128
 # Screens in the wall must use 100% scaling.
 PHYSICAL=all
 
-# Wall presets, one Moonlight app each:  "COUNT WIDTHxHEIGHT REFRESH LAYOUT"
-#   COUNT    number of virtual monitors
+# Wall presets:  "COUNT WIDTHxHEIGHT REFRESH"
+#   COUNT    number of virtual monitors, split left and right of the physical
+#            screens (side by side; framewall-vr shows each as its own panel)
 #   REFRESH  virtual monitor refresh rate AND stream fps. Match your headset's
-#            refresh rate (e.g. 90, 108, 120, 144): a stream faster than the headset
-#            wastes GPU time and can make head movement stutter.
-#   LAYOUT   top  - virtual monitors in a row above the physical screens
-#                   (e.g. 2x 1080p over a 1920x1200 laptop = 3840x2280, close
-#                   to 16:9, so it fills a theater/cinema screen)
-#            row  - physical screens in the middle, virtual monitors split
-#                   left/right (wide; letterboxed on a 16:9 theater screen)
-#            grid - virtual monitors in rows above the physical screens, with
-#                   the column count that makes the wall closest to 16:9
-# The `row` presets are for framewall-vr (client/framewall-vr), which shows
-# each monitor as its own panel side by side around you; it picks the row
-# preset matching the headset's refresh rate. The others suit Moonlight's
-# theater screen.
+#            refresh rate (e.g. 90, 108, 120, 144): framewall-vr picks the
+#            preset matching it, and a stream faster than the headset wastes
+#            GPU time.
 PRESETS=(
-    "2 1920x1080 144 top"
-    "2 1920x1080 120 top"
-    "2 1920x1080 108 top"
-    "2 1920x1080 90 top"
-    "3 1920x1080 90 grid"
-    "2 1920x1080 144 row"
-    "2 1920x1080 120 row"
-    "2 1920x1080 108 row"
-    "2 1920x1080 90 row"
+    "2 1920x1080 144"
+    "2 1920x1080 120"
+    "2 1920x1080 108"
+    "2 1920x1080 90"
 )
 
 # Where Sunshine keeps its state (pairing), log and generated config.

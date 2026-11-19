@@ -23,37 +23,19 @@ bool parse_wall(const std::string &app, Wall &wall, std::string &err) {
     std::vector<Rect> virt(n);
     Rect block{0, 0, bw, bh};
     int W = 0, H = 0;
-    if (w.shape == "top" || (w.shape == "grid" && n <= 1)) {
-        const int row = n * vw;
-        W = std::max(row, bw);
-        for (int i = 0; i < n; i++) virt[i] = {(W - row) / 2 + i * vw, 0, vw, vh};
-        block.x = (W - bw) / 2;
-        block.y = n ? vh : 0;
-        H = (n ? vh : 0) + bh;
-    } else if (w.shape == "row") {
-        const int left = n / 2;
-        H = std::max(n ? vh : 0, bh);
-        int x = 0;
-        for (int i = 0; i < left; i++) { virt[i] = {x, (H - vh) / 2, vw, vh}; x += vw; }
-        block.x = x; block.y = (H - bh) / 2; x += bw;
-        for (int i = left; i < n; i++) { virt[i] = {x, (H - vh) / 2, vw, vh}; x += vw; }
-        W = x;
-    } else if (w.shape == "grid") {
-        double best = -1;
-        int cols = 1, gw = 0, gh = 0;
-        for (int c = 1; c <= n; c++) {
-            const int gw_ = c * vw, gh_ = (n + c - 1) / c * vh;
-            const int W_ = std::max(gw_, bw), H_ = gh_ + bh;
-            const double score = std::fabs(double(W_) / H_ - 16.0 / 9.0);
-            if (best < 0 || score < best) { best = score; cols = c; gw = gw_; gh = gh_; W = W_; H = H_; }
-        }
-        for (int i = 0; i < n; i++) virt[i] = {(W - gw) / 2 + (i % cols) * vw, (i / cols) * vh, vw, vh};
-        block.x = (W - bw) / 2;
-        block.y = gh;
-    } else {
-        err = "unknown wall layout \"" + w.shape + "\"";
+    if (w.shape != "row") {
+        err = "\"" + app + "\" uses the old \"" + w.shape + "\" layout; update framewall on the host (walls are side by side now)";
         return false;
     }
+    // Side by side: the physical screens in the middle, the virtual monitors
+    // split left and right, all vertically centred.
+    const int left = n / 2;
+    H = std::max(n ? vh : 0, bh);
+    int x = 0;
+    for (int i = 0; i < left; i++) { virt[i] = {x, (H - vh) / 2, vw, vh}; x += vw; }
+    block.x = x; block.y = (H - bh) / 2; x += bw;
+    for (int i = left; i < n; i++) { virt[i] = {x, (H - vh) / 2, vw, vh}; x += vw; }
+    W = x;
     if (W != w.width || H != w.height) {
         err = "wall layout mismatch: computed " + std::to_string(W) + "x" + std::to_string(H) + " for \"" + app + "\"";
         return false;

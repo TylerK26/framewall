@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # framewall (host): stream your physical screens plus N virtual monitors to a
-# VR headset as ONE Moonlight stream, a "monitor wall".
+# VR headset as ONE stream, a "monitor wall".
 #
 # Runs on Linux with KDE Plasma 6 (Wayland). Virtual monitors come from
 # krfb-virtualmonitor; a patched Sunshine (see ../sunshine) captures the
 # bounding box of all screens through KWin's screencast protocol.
 #
 #   framewall install      write the Sunshine config + apps, enable the service
-#   framewall apps         list the wall presets (Moonlight app names)
+#   framewall apps         list the wall presets (their app names)
 #   framewall up PRESET    create the wall for a preset (Sunshine runs this)
 #   framewall down         remove the virtual monitors again
 #   framewall status       show services and screens
@@ -33,9 +33,9 @@ VAAPI_QUALITY=speed                      # vaapi encoder preset: speed | balance
 FEC_PERCENT=""                           # error correction share of the stream (empty = Sunshine's 20)
 PHYSICAL=all                             # physical screens in the wall: all | primary |
                                          # "NAME NAME..." | none
-PRESETS=(                                # "COUNT WIDTHxHEIGHT REFRESH LAYOUT"
-    "2 1920x1080 120 top"
-    "2 1920x1080 90 top"
+PRESETS=(                                # "COUNT WIDTHxHEIGHT REFRESH"
+    "2 1920x1080 144"
+    "2 1920x1080 108"
 )
 SUNSHINE_DIR="$CONFIG_DIR/sunshine"      # Sunshine state (pairing), logs, apps
 EXTRA_SUNSHINE_CONFIG=""                 # extra lines appended to sunshine.conf
@@ -47,7 +47,7 @@ die() { echo "framewall: $*" >&2; exit 1; }
 kscreen_json() { kscreen-doctor -j 2>/dev/null; }
 
 # Plan a preset from KWin's current screens (kscreen-doctor -j on stdin).
-#   plan COUNT W H LAYOUT
+#   plan COUNT W H
 # Prints:
 #   WALL w h              wall size (= stream size)
 #   BLOCK w h             size of the block of physical screens in the wall
@@ -56,14 +56,15 @@ kscreen_json() { kscreen-doctor -j 2>/dev/null; }
 #   SAVE name x y         original position of every other screen (restored by down)
 #   WARN text
 # Physical screens in the wall keep their arrangement (as one block); the
-# virtual monitors Virtual-wall1..N are added around that block. Screens left
-# out stay put, and the wall is placed to their right.
+# virtual monitors Virtual-wall1..N are split left and right of that block,
+# vertically centred. Screens left out stay put, and the wall is placed to
+# their right.
 plan() {
     # The program itself arrives on python's stdin, so the screens go by env.
-    FRAMEWALL_SCREENS="$(cat)" python3 - "$1" "$2" "$3" "$4" "$PHYSICAL" "${FRAMEWALL_EXTRA_PHYSICAL:-}" <<'PY'
-import json, math, os, sys
+    FRAMEWALL_SCREENS="$(cat)" python3 - "$1" "$2" "$3" "$PHYSICAL" "${FRAMEWALL_EXTRA_PHYSICAL:-}" <<'PY'
+import json, os, sys
 n, w, h = int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3])
-shape, spec, extra = sys.argv[4], sys.argv[5].split(), sys.argv[6].split()
+spec, extra = sys.argv[4].split(), sys.argv[5].split()
 # KWin leaves "enabled" out for virtual outputs: treat missing as true.
 outs = [o for o in json.loads(os.environ["FRAMEWALL_SCREENS"])["outputs"]
         if o.get("enabled", True) and o.get("connected", True)]
@@ -112,39 +113,15 @@ else:
 virt = [f"Virtual-wall{i}" for i in range(1, n + 1)]
 pos = {}          # name -> (x, y) relative to the wall's top-left
 bpos = (0, 0)     # block's top-left relative to the wall
-if shape == "top" or (shape == "grid" and n <= 1):
-    row = n * w
-    W = max(row, bw)
-    for i, v in enumerate(virt):
-        pos[v] = ((W - row) // 2 + i * w, 0)
-    bpos = ((W - bw) // 2, h if n else 0)
-    H = (h if n else 0) + bh
-elif shape == "row":
-    left = n // 2
-    H = max(h if n else 0, bh)
-    x = 0
-    for v in virt[:left]:
-        pos[v] = (x, (H - h) // 2); x += w
-    bpos = (x, (H - bh) // 2); x += bw
-    for v in virt[left:]:
-        pos[v] = (x, (H - h) // 2); x += w
-    W = x
-elif shape == "grid":
-    # Virtual monitors in rows above the block; pick the column count that
-    # makes the whole wall closest to 16:9.
-    best = None
-    for cols in range(1, n + 1):
-        gw, gh = cols * w, math.ceil(n / cols) * h
-        W_, H_ = max(gw, bw), gh + bh
-        score = abs(W_ / H_ - 16 / 9)
-        if best is None or score < best[0]:
-            best = (score, cols, gw, gh, W_, H_)
-    _, cols, gw, gh, W, H = best
-    for i, v in enumerate(virt):
-        pos[v] = ((W - gw) // 2 + (i % cols) * w, (i // cols) * h)
-    bpos = ((W - bw) // 2, gh)
-else:
-    sys.exit(f"unknown layout '{shape}' (top, row, grid)")
+left = n // 2
+H = max(h if n else 0, bh)
+x = 0
+for v in virt[:left]:
+    pos[v] = (x, (H - h) // 2); x += w
+bpos = (x, (H - bh) // 2); x += bw
+for v in virt[left:]:
+    pos[v] = (x, (H - h) // 2); x += w
+W = x
 
 # Place the wall to the right of any screens left out of it.
 ox = max((geom(o)[0] + geom(o)[2] for o in excluded), default=0)
@@ -182,30 +159,23 @@ if g:
 ' "$@"
 }
 
-# Moonlight app name for a preset; the client reads the stream size and
-# refresh rate from it ("... @RATE ... (WxH)"). "+BWxBH" is the size of the
-# physical-screen block: with it, the VR client can work out where every
-# monitor sits in the stream (same layout rules as plan).
-app_name() {   # count res hz shape BW BH W H
-    echo "Wall ${1}x${2}@${3} ${4} +${5}x${6} (${7}x${8})"
+# App name for a preset; framewall-vr reads the stream size and refresh rate
+# from it ("... @RATE ... (WxH)"). "+BWxBH" is the size of the physical-screen
+# block: with it, framewall-vr works out where every monitor sits in the
+# stream (same layout rules as plan). "row" names the (side by side) layout.
+app_name() {   # count res hz BW BH W H
+    echo "Wall ${1}x${2}@${3} row +${4}x${5} (${6}x${7})"
 }
 
-# Smallest common Steam "Maximum game resolution" that fits a WxH wall, so the
-# headset's Moonlight shows it 1:1 (bigger options cost headset GPU time).
-steam_fit() {
-    local W=$1 H=$2 r
-    for r in 1920x1080 1920x1200 2560x1440 2560x1600 3840x2160 3840x2400 5120x2880; do
-        (( ${r%x*} >= W && ${r#*x} >= H )) && { echo "$r"; return; }
-    done
-    echo "none fits (wider/taller than 5120x2880; Moonlight scales the wall down)"
-}
-
-preset_fields() {   # preset string -> "count w h hz shape"
-    local count res hz shape
-    read -r count res hz shape <<< "$1"
+preset_fields() {   # preset string -> "count w h hz"
+    local count res hz layout
+    read -r count res hz layout <<< "$1"
     [[ "$count" =~ ^[0-9]+$ && "$res" =~ ^[0-9]+x[0-9]+$ && "$hz" =~ ^[0-9]+$ ]] ||
-        die "bad preset '$1' (expected: COUNT WIDTHxHEIGHT REFRESH LAYOUT)"
-    echo "$count ${res%x*} ${res#*x} $hz ${shape:-top}"
+        die "bad preset '$1' (expected: COUNT WIDTHxHEIGHT REFRESH)"
+    # Older configs named a layout; side by side ("row") is the only one now.
+    [[ -z "$layout" || "$layout" == row ]] ||
+        die "preset '$1': the '$layout' layout is gone (walls are side by side now); drop it from the preset"
+    echo "$count ${res%x*} ${res#*x} $hz"
 }
 
 wait_for_output() {
@@ -219,22 +189,24 @@ wait_for_output() {
 }
 
 cmd_apps() {
-    local json p count w h hz shape W H BW BH out
+    local json p f count w h hz W H BW BH out
     json=$(kscreen_json)
     for p in "${PRESETS[@]}"; do
-        read -r count w h hz shape <<< "$(preset_fields "$p")"
-        out=$(plan "$count" "$w" "$h" "$shape" <<< "$json")
+        f=$(preset_fields "$p")
+        read -r count w h hz <<< "$f"
+        out=$(plan "$count" "$w" "$h" <<< "$json")
         read -r _ W H <<< "$(grep '^WALL' <<< "$out")"
         read -r _ BW BH <<< "$(grep '^BLOCK' <<< "$out")"
-        app_name "$count" "${w}x$h" "$hz" "$shape" "$BW" "$BH" "$W" "$H"
+        app_name "$count" "${w}x$h" "$hz" "$BW" "$BH" "$W" "$H"
     done
 }
 
 cmd_up() {
     local preset="${1:-}"
-    [[ -n "$preset" ]] || die "usage: framewall up COUNT WIDTHxHEIGHT REFRESH LAYOUT"
-    local count w h hz shape
-    read -r count w h hz shape <<< "$(preset_fields "$preset")"
+    [[ -n "$preset" ]] || die "usage: framewall up COUNT WIDTHxHEIGHT REFRESH"
+    local f count w h hz
+    f=$(preset_fields "$preset")
+    read -r count w h hz <<< "$f"
     cmd_down
     mkdir -p "$SUNSHINE_DIR"
     # Snapshot the arrangement BEFORE adding virtual monitors: when they appear,
@@ -256,7 +228,7 @@ cmd_up() {
     done
 
     local planout
-    planout=$(plan "$count" "$w" "$h" "$shape" <<< "$screens")
+    planout=$(plan "$count" "$w" "$h" <<< "$screens")
     { grep '^WARN ' <<< "$planout" || true; } | sed 's/^WARN /framewall: warning: /' >&2
     # Every screen's original position, put back by `down`.
     { grep '^SAVE ' <<< "$planout" || true; } | cut -d' ' -f2- > "$SUNSHINE_DIR/saved-layout"
@@ -280,7 +252,7 @@ cmd_up() {
     region=$(bbox_of "${names[@]}")
     echo "$region" > "$SUNSHINE_DIR/region"
     read -r _ _ W H <<< "$region"
-    echo "framewall: ${count}x ${w}x${h}@${hz} ($shape) + ${#names[@]} screens -> stream ${W}x${H} (region $region)"
+    echo "framewall: ${count}x ${w}x${h}@${hz} + ${#names[@]} screens -> stream ${W}x${H} (region $region)"
 }
 
 cmd_down() {
@@ -301,23 +273,24 @@ cmd_install() {
     command -v kscreen-doctor >/dev/null || die "kscreen-doctor not found (install kscreen)"
     mkdir -p "$SUNSHINE_DIR" "$HOME/.config/systemd/user"
 
-    # Moonlight apps, one per preset. ("env" is required: Sunshine aborts at
+    # Sunshine apps, one per preset. ("env" is required: Sunshine aborts at
     # startup without it.)
     {
         echo '{'
         echo '    "env": {},'
         echo '    "apps": ['
-        local p count w h hz shape sep="" names
+        local p f count w h hz sep="" names
         mapfile -t names < <(cmd_apps)
         local i=0
         for p in "${PRESETS[@]}"; do
-            read -r count w h hz shape <<< "$(preset_fields "$p")"
+            f=$(preset_fields "$p")
+            read -r count w h hz <<< "$f"
             printf '%s        {\n            "name": "%s",\n            "image-path": "desktop.png",\n            "prep-cmd": [ { "do": "%s up %s", "undo": "%s down" } ]\n        }' \
-                "$sep" "${names[$i]}" "$SELF" "$count ${w}x$h $hz $shape" "$SELF"
+                "$sep" "${names[$i]}" "$SELF" "$count ${w}x$h $hz" "$SELF"
             sep=$',\n'
             i=$((i + 1))
         done
-        printf '%s        { "name": "Physical screens only", "image-path": "desktop.png" }\n' "$sep"
+        printf '\n'
         echo '    ]'
         echo '}'
     } > "$SUNSHINE_DIR/apps.json"
@@ -363,17 +336,9 @@ UNIT
     echo "framewall: Sunshine \"$NAME\" running on port $PORT"
     echo "  pair from Moonlight, then enter the PIN at https://localhost:$((PORT + 1))"
     echo "  firewall: allow TCP $((PORT - 5)),$PORT,$((PORT + 1)),$((PORT + 5)) (framewall-panels),$((PORT + 21)) and UDP $((PORT + 9))-$((PORT + 11)),$((PORT + 13))"
-    echo "  apps (with Moonlight, set the headset's Steam \"Maximum game resolution\" as shown;"
-    echo "  framewall-vr shows each monitor as its own panel and doesn't need it):"
+    echo "  wall presets (framewall-vr picks the one at the headset's refresh rate):"
     local a
-    while IFS= read -r a; do
-        if [[ "$a" == *" row "* ]]; then
-            a="$a  ->  for framewall-vr"
-        elif [[ "$a" =~ \(([0-9]+)x([0-9]+)\)$ ]]; then
-            a="$a  ->  Steam: $(steam_fit "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}")"
-        fi
-        echo "    $a"
-    done < <(cmd_apps)
+    while IFS= read -r a; do echo "    $a"; done < <(cmd_apps)
 }
 
 cmd_uninstall() {

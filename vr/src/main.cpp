@@ -138,8 +138,7 @@ std::unique_ptr<NvHttp> find_host(const MoonlightConf &mc, const std::string &wa
     return nullptr;
 }
 
-// Default preset: a side-by-side ("row") wall at the headset's refresh rate,
-// else the closest refresh rate, else any wall.
+// Default preset: the wall at the headset's refresh rate, else the closest.
 const NvApp *pick_app(const std::vector<NvApp> &apps, const std::string &want, float hmd_hz, std::string &err) {
     if (!want.empty()) {
         for (auto &a : apps) if (a.title == want) return &a;
@@ -153,7 +152,7 @@ const NvApp *pick_app(const std::vector<NvApp> &apps, const std::string &want, f
         Wall w;
         std::string e;
         if (!parse_wall(a.title, w, e)) continue;
-        const double score = (w.shape == "row" ? 0 : 1000) + std::fabs(w.hz - hmd_hz);
+        const double score = std::fabs(w.hz - hmd_hz);
         if (score < best_score) { best_score = score; best = &a; }
     }
     if (!best) err = "the host offers no wall presets (update framewall on the host?)";

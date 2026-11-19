@@ -21,7 +21,7 @@ struct Panel {
 
 struct Wall {
     int count = 0, vw = 0, vh = 0, hz = 0;  // virtual monitors
-    std::string shape;                      // top, row, grid
+    std::string shape;                      // "row" (side by side), the only layout
     int bw = 0, bh = 0;                     // physical-screen block
     int width = 0, height = 0;              // stream size
     std::vector<Panel> panels;
