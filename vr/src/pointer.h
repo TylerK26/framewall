@@ -11,6 +11,10 @@
 // wall stream, so the PC's cursor sits under the dot. Drawn as two OpenXR
 // quad layers on top of the panels: a thin ray and a dot.
 //
+// With the laser off and the menu closed, the controllers are an Xbox
+// controller on the PC instead (pad()): sticks, triggers, bumpers, stick
+// clicks, face buttons, d-pad, menu = Start, view = Back. The grips stay here.
+//
 // Main thread only (input is read once per display frame).
 //
 // Copyright (C) 2026 framewall contributors. GPL-3.0-or-later.
@@ -46,6 +50,22 @@ public:
     bool update(XrTime t, const std::vector<PanelPose> &poses, const std::vector<Rect> &regions, float radius,
                 const Mouse &mouse, Menu &menu);
 
+    // The Xbox controller as of the last update(): neutral while the laser is
+    // on, the menu is open or the app isn't focused. Buttons use Limelight's
+    // *_FLAG values; sticks are -32768..32767 with up = +.
+    struct Pad {
+        int buttons = 0;
+        uint8_t lt = 0, rt = 0;
+        int16_t lx = 0, ly = 0, rx = 0, ry = 0;
+        bool operator==(const Pad &o) const {
+            return buttons == o.buttons && lt == o.lt && rt == o.rt && lx == o.lx && ly == o.ly && rx == o.rx && ry == o.ry;
+        }
+    };
+    const Pad &pad() const { return pad_; }
+    // The PC's rumble (0..1 per motor): low on the left controller, high on
+    // the right. Call every frame.
+    void rumble(float low, float high);
+
     // Appends the ray(s) and dot, valid until the next call.
     void layers(std::vector<XrCompositionLayerBaseHeader *> &out);
 
@@ -70,6 +90,13 @@ private:
     XrActionSet set_ = XR_NULL_HANDLE;
     XrAction aim_ = XR_NULL_HANDLE, grip_ = XR_NULL_HANDLE, trigger_ = XR_NULL_HANDLE, bumper_ = XR_NULL_HANDLE,
              right_ = XR_NULL_HANDLE, stick_ = XR_NULL_HANDLE, buzz_ = XR_NULL_HANDLE;
+    // Gamepad-only buttons.
+    XrAction a_ = XR_NULL_HANDLE, b_ = XR_NULL_HANDLE, x_ = XR_NULL_HANDLE, y_ = XR_NULL_HANDLE, up_ = XR_NULL_HANDLE,
+             down_ = XR_NULL_HANDLE, leftd_ = XR_NULL_HANDLE, rightd_ = XR_NULL_HANDLE, start_ = XR_NULL_HANDLE,
+             back_ = XR_NULL_HANDLE;
+    Pad pad_;
+    float rumble_[2] = {0, 0};
+    uint64_t rumble_sent_ms_[2] = {0, 0};
     XrSpace view_ = XR_NULL_HANDLE;
     Hand hands_[2];
 

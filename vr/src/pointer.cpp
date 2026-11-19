@@ -3,6 +3,8 @@
 
 #include "log.h"
 
+#include <Limelight.h>
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -135,7 +137,17 @@ bool Pointer::make_actions(std::string &err) {
         !action("click_bumper", "Left click (bumper)", XR_ACTION_TYPE_BOOLEAN_INPUT, bumper_) ||
         !action("right_click", "Right click (stick click)", XR_ACTION_TYPE_BOOLEAN_INPUT, right_) ||
         !action("scroll", "Scroll (stick)", XR_ACTION_TYPE_VECTOR2F_INPUT, stick_) ||
-        !action("buzz", "Haptics", XR_ACTION_TYPE_VIBRATION_OUTPUT, buzz_)) {
+        !action("buzz", "Haptics", XR_ACTION_TYPE_VIBRATION_OUTPUT, buzz_) ||
+        !action("pad_a", "Gamepad A", XR_ACTION_TYPE_BOOLEAN_INPUT, a_) ||
+        !action("pad_b", "Gamepad B", XR_ACTION_TYPE_BOOLEAN_INPUT, b_) ||
+        !action("pad_x", "Gamepad X", XR_ACTION_TYPE_BOOLEAN_INPUT, x_) ||
+        !action("pad_y", "Gamepad Y", XR_ACTION_TYPE_BOOLEAN_INPUT, y_) ||
+        !action("pad_up", "Gamepad d-pad up", XR_ACTION_TYPE_BOOLEAN_INPUT, up_) ||
+        !action("pad_down", "Gamepad d-pad down", XR_ACTION_TYPE_BOOLEAN_INPUT, down_) ||
+        !action("pad_left", "Gamepad d-pad left", XR_ACTION_TYPE_BOOLEAN_INPUT, leftd_) ||
+        !action("pad_right", "Gamepad d-pad right", XR_ACTION_TYPE_BOOLEAN_INPUT, rightd_) ||
+        !action("pad_start", "Gamepad Start (menu)", XR_ACTION_TYPE_BOOLEAN_INPUT, start_) ||
+        !action("pad_back", "Gamepad Back (view)", XR_ACTION_TYPE_BOOLEAN_INPUT, back_)) {
         err = "can't create the pointer's actions";
         return false;
     }
@@ -149,14 +161,26 @@ bool Pointer::make_actions(std::string &err) {
                  {bumper_, {"/input/bumper/click", "/input/shoulder/click"}},
                  {right_, {"/input/thumbstick/click", "/input/joystick/click"}},
                  {stick_, {"/input/thumbstick", "/input/joystick"}},
-                 {buzz_, {"/output/haptic"}}});
+                 {buzz_, {"/output/haptic"}},
+                 {a_, {"/input/a/click"}},
+                 {b_, {"/input/b/click"}},
+                 {x_, {"/input/x/click"}},
+                 {y_, {"/input/y/click"}},
+                 {up_, {"/input/dpad_up/click", "/input/dpad/up/click"}},
+                 {down_, {"/input/dpad_down/click", "/input/dpad/down/click"}},
+                 {leftd_, {"/input/dpad_left/click", "/input/dpad/left/click"}},
+                 {rightd_, {"/input/dpad_right/click", "/input/dpad/right/click"}},
+                 {start_, {"/input/menu/click", "/input/start/click"}},
+                 {back_, {"/input/view/click", "/input/back/click", "/input/select/click"}}});
     suggest("/interaction_profiles/valve/index_controller",
             {{aim_, {"/input/aim/pose"}},
              {grip_, {"/input/squeeze/force", "/input/squeeze/value"}},
              {trigger_, {"/input/trigger/value"}},
              {right_, {"/input/thumbstick/click"}},
              {stick_, {"/input/thumbstick"}},
-             {buzz_, {"/output/haptic"}}});
+             {buzz_, {"/output/haptic"}},
+             {a_, {"/input/a/click"}},
+             {b_, {"/input/b/click"}}});
     suggest("/interaction_profiles/khr/simple_controller",
             {{aim_, {"/input/aim/pose"}}, {bumper_, {"/input/select/click"}}, {buzz_, {"/output/haptic"}}});
 
@@ -215,6 +239,31 @@ void Pointer::haptic(int hand) {
     xrApplyHapticFeedback(xr_.session, &hi, reinterpret_cast<XrHapticBaseHeader *>(&v));
 }
 
+void Pointer::rumble(float low, float high) {
+    // Each motor drives one controller; the vibration is renewed while it
+    // lasts (OpenXR haptics have a duration) and stopped when it ends.
+    const float want[2] = {low, high};
+    const uint64_t now = now_ms();
+    for (int i = 0; i < 2; i++) {
+        XrHapticActionInfo hi{XR_TYPE_HAPTIC_ACTION_INFO};
+        hi.action = buzz_;
+        hi.subactionPath = hands_[i].path;
+        if (want[i] <= 0.01f) {
+            if (rumble_[i] > 0.01f) xrStopHapticFeedback(xr_.session, &hi);
+            rumble_[i] = 0;
+            continue;
+        }
+        if (std::fabs(want[i] - rumble_[i]) < 0.02f && now - rumble_sent_ms_[i] < 80) continue;
+        XrHapticVibration v{XR_TYPE_HAPTIC_VIBRATION};
+        v.duration = 150'000'000;  // 150 ms, renewed every 80 ms while it lasts
+        v.frequency = XR_FREQUENCY_UNSPECIFIED;
+        v.amplitude = std::clamp(want[i], 0.0f, 1.0f);
+        xrApplyHapticFeedback(xr_.session, &hi, reinterpret_cast<XrHapticBaseHeader *>(&v));
+        rumble_[i] = want[i];
+        rumble_sent_ms_[i] = now;
+    }
+}
+
 void Pointer::release_buttons(const Mouse &mouse) {
     for (int b = 0; b < 2; b++)
         if (held_[b]) mouse.button(b == 1, false);
@@ -225,6 +274,7 @@ bool Pointer::update(XrTime t, const std::vector<PanelPose> &poses, const std::v
                      const Mouse &mouse, Menu &menu) {
     dot_ = false;
     for (auto &h : hands_) h.ray = false;
+    pad_ = Pad{};
     if (!xr_.focused()) {  // the Steam menu or another app has the controllers
         release_buttons(mouse);
         for (auto &h : hands_) h.grip = h.left = h.right = false, h.grip_down_ms = 0;
@@ -237,7 +287,9 @@ bool Pointer::update(XrTime t, const std::vector<PanelPose> &poses, const std::v
     if (XR_FAILED(xrSyncActions(xr_.session, &sync))) return false;
 
     const uint64_t now = now_ms();
-    bool grip_now[2], left_now[2], right_now[2];
+    bool grip_now[2], left_now[2], right_now[2], bumper_now[2];
+    float trigger_value[2] = {0, 0};
+    int pad_buttons = 0;
     XrVector2f stick[2] = {};
     for (int i = 0; i < 2; i++) {
         Hand &h = hands_[i];
@@ -251,12 +303,22 @@ bool Pointer::update(XrTime t, const std::vector<PanelPose> &poses, const std::v
         };
         grip_now[i] = boolean(grip_);
         const bool bumper = boolean(bumper_);
+        bumper_now[i] = bumper;
         right_now[i] = boolean(right_);
+        // Gamepad buttons, wherever SteamVR bound them.
+        // (SteamVR reports the Frame's X and Y the other way round from the
+        // Xbox buttons a gamepad tester shows for them: swapped here.)
+        const std::pair<XrAction, int> pad_map[] = {{a_, A_FLAG}, {b_, B_FLAG}, {x_, Y_FLAG}, {y_, X_FLAG},
+                                                    {up_, UP_FLAG}, {down_, DOWN_FLAG}, {leftd_, LEFT_FLAG},
+                                                    {rightd_, RIGHT_FLAG}, {start_, PLAY_FLAG}, {back_, BACK_FLAG}};
+        for (const auto &[act, flag] : pad_map)
+            if (boolean(act)) pad_buttons |= flag;
         // Trigger: analog, with hysteresis, so a light pull clicks.
         XrActionStateFloat f{XR_TYPE_ACTION_STATE_FLOAT};
         gi.action = trigger_;
         xrGetActionStateFloat(xr_.session, &gi, &f);
         const float tv = f.isActive ? f.currentState : 0;
+        trigger_value[i] = tv;
         trigger_down_[i] = trigger_down_[i] ? tv > kTriggerUp : tv > kTriggerDown;
         left_now[i] = trigger_down_[i] || bumper;
         XrActionStateVector2f v{XR_TYPE_ACTION_STATE_VECTOR2F};
@@ -295,6 +357,20 @@ bool Pointer::update(XrTime t, const std::vector<PanelPose> &poses, const std::v
         h.grip = grip_now[i];
     }
     if (chord) release_buttons(mouse);
+
+    // The Xbox controller, while the laser is off and the menu closed.
+    if (laser_ < 0 && !menu.is_open()) {
+        auto axis = [](float v) { return int16_t(std::lround(std::clamp(v, -1.0f, 1.0f) * 32767)); };
+        auto trig = [](float v) { return uint8_t(std::lround(std::clamp(v, 0.0f, 1.0f) * 255)); };
+        pad_.buttons = pad_buttons | (bumper_now[0] ? LB_FLAG : 0) | (bumper_now[1] ? RB_FLAG : 0) |
+                       (right_now[0] ? LS_CLK_FLAG : 0) | (right_now[1] ? RS_CLK_FLAG : 0);
+        pad_.lt = trig(trigger_value[0]);
+        pad_.rt = trig(trigger_value[1]);
+        pad_.lx = axis(stick[0].x);
+        pad_.ly = axis(stick[0].y);
+        pad_.rx = axis(stick[1].x);
+        pad_.ry = axis(stick[1].y);
+    }
     for (int i = 0; i < 2; i++) {
         Hand &h = hands_[i];
         if (!h.grip_down_ms || now - h.grip_down_ms < kChordMs) continue;

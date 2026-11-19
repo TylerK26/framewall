@@ -65,6 +65,7 @@ using clk = std::chrono::steady_clock;
 std::atomic<bool> g_stop{false};
 std::atomic<int> g_terminated{1};  // 1 = still running, else the error code
 std::atomic<bool> g_poor{false};   // the connection is losing packets
+std::atomic<uint32_t> g_rumble{0}; // the PC's rumble for our pad: low << 16 | high
 VideoPipeline *g_video = nullptr;
 
 uint64_t now_ms() {
@@ -193,6 +194,10 @@ void cl_log(const char *fmt, ...) {
 void cl_status(int status) {
     g_poor = status == CONN_STATUS_POOR;
     fwlog("connection: %s", status == CONN_STATUS_POOR ? "poor (packet loss or high latency)" : "okay");
+}
+
+void cl_rumble(unsigned short num, unsigned short low, unsigned short high) {
+    if (num == 0) g_rumble = (uint32_t(low) << 16) | high;
 }
 
 void on_signal(int) { g_stop = true; }
@@ -381,6 +386,7 @@ int main(int argc, char **argv) {
     cl.connectionTerminated = cl_terminated;
     cl.logMessage = cl_log;
     cl.connectionStatusUpdate = cl_status;
+    cl.rumble = cl_rumble;
     DECODER_RENDERER_CALLBACKS dr;
     LiInitializeVideoCallbacks(&dr);
     dr.setup = dr_setup;
@@ -397,6 +403,14 @@ int main(int argc, char **argv) {
         if (s.quit_on_exit && !http->quit(err)) fwlog("host: quit failed: %s", err.c_str());
         return 1;
     }
+
+    // The controllers, as one Xbox controller (sent while the laser is off).
+    LiSendControllerArrivalEvent(0, 1, LI_CTYPE_XBOX,
+                                 A_FLAG | B_FLAG | X_FLAG | Y_FLAG | UP_FLAG | DOWN_FLAG | LEFT_FLAG | RIGHT_FLAG | LB_FLAG |
+                                     RB_FLAG | PLAY_FLAG | BACK_FLAG | LS_CLK_FLAG | RS_CLK_FLAG,
+                                 LI_CCAP_ANALOG_TRIGGERS | LI_CCAP_RUMBLE);
+    Pointer::Pad sent_pad;
+    uint64_t pad_sent_ms = 0;
 
     // ---- the frame loop ----
     // Frames go onto the wall as soon as they're decoded, on the renderer's
@@ -456,6 +470,18 @@ int main(int argc, char **argv) {
         if (pointer.update(fs.predictedDisplayTime, poses, regions, s.place.radius, mouse, menu)) {
             if (menu.is_open()) menu.close();
             else { menu.open(fs.predictedDisplayTime); last_info = 0; }
+        }
+        // The gamepad: on change, and every 100 ms so Sunshine never thinks
+        // it's gone quiet.
+        if (!(pointer.pad() == sent_pad) || now_ms() - pad_sent_ms > 100) {
+            const Pointer::Pad &p = pointer.pad();
+            LiSendMultiControllerEvent(0, 1, p.buttons, p.lt, p.rt, p.lx, p.ly, p.rx, p.ry);
+            sent_pad = p;
+            pad_sent_ms = now_ms();
+        }
+        {
+            const uint32_t r = g_rumble;
+            pointer.rumble(float(r >> 16) / 65535.0f, float(r & 0xffff) / 65535.0f);
         }
         const Menu::Action act = menu.take_action();
         switch (act) {
