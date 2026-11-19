@@ -241,10 +241,12 @@ VR client (`~/.config/framewall-vr.conf` on the headset): `SIZE`,
   in theater mode on the Steam Frame, 108 Hz with a 108 Hz preset was the sweet
   spot for a 3840×2280 wall (144 Hz stuttered). framewall-vr runs a 5760×1200
   `row` wall smoothly at 144 Hz.
-- **Brief freezes with blocky images** come from bursts of Wi-Fi packet loss:
-  the picture waits for a new keyframe (Sunshine's VA-API encoder can't recover
-  any other way). Keep the headset close to the 6 GHz adapter, or try a higher
-  `FEC_PERCENT` or a lower `BITRATE_KBPS`.
+- **Brief freezes with blocky images** come from short bursts of Wi-Fi packet
+  loss: the picture waits for a new keyframe (Sunshine's VA-API encoder can't
+  recover any other way). On a Linux host, the Steam Frame's USB wireless
+  adapter currently drops out briefly from time to time, which is the likely
+  cause; it isn't framewall's encoder or decoder. A higher `FEC_PERCENT` or a
+  lower `BITRATE_KBPS` may soften it.
 - **Sharper text:**
   - Use a larger theater screen.
   - Raise `BITRATE_KBPS` (e.g. `150000`).
