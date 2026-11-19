@@ -9,8 +9,6 @@
 // Copyright (C) 2026 framewall contributors. GPL-3.0-or-later.
 #pragma once
 
-#include <openvr.h>
-
 #include <string>
 #include <vector>
 
@@ -41,7 +39,6 @@ struct Placement {
 };
 
 struct PanelPose {
-    vr::HmdMatrix34_t transform;  // in the seated universe
     float width_m = 0, height_m = 0;
     float theta = 0, y = 0;       // centre on the cylinder: angle (rad, + = right), height (m)
     // The point of the panel that stays put when it is resized (its edge
@@ -49,7 +46,7 @@ struct PanelPose {
     float anchor_x = 0, anchor_y = 0;
 };
 
-// Panels on a vertical cylinder around the seated origin, keeping the
+// Panels on a vertical cylinder of radius p.radius around the seated origin, keeping the
 // monitors' arrangement: left/right becomes angle around you, up/down stays.
 // `scales` (one per panel, default 1) resizes panels individually: the
 // physical screens stay where they are and the other panels move outwards

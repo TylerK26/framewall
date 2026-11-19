@@ -16,9 +16,7 @@ struct Settings {
     int bitrate_kbps = 0;  // 0 = automatic from the wall size
     bool audio = true;
     bool quit_on_exit = true;
-    int window = -1;       // -1 = only when launched from Steam
     int seconds = 0;       // stop after this long (testing)
-    std::string dump;
     bool list = false;
     bool quit = false;     // just quit the wall on the host
     float size = 1;        // SIZE: every panel at once

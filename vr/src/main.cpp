@@ -1,20 +1,19 @@
 // framewall-vr: show a framewall monitor wall in VR as separate panels side
-// by side around you, instead of one flat screen in theater mode.
+// by side around you.
 //
-// It is a SteamVR overlay app for the Steam Frame. It connects to the
-// framewall host (Sunshine) like Moonlight does, reusing Moonlight's pairing,
-// decodes the one wall stream on the headset's hardware decoder and shows
-// each monitor of the wall on its own panel. Mouse and keyboard stay on the
-// PC; the headset's controllers are passed through as an Xbox controller
-// when it is launched from Steam.
+// A native OpenXR app for the Steam Frame. It connects to the framewall host
+// (Sunshine) like Moonlight does, reusing Moonlight's pairing, decodes the one
+// wall stream on the headset's hardware decoder and shows each monitor of the
+// wall as its own curved panel (an OpenXR cylinder layer), over a dark void.
+// Mouse and keyboard stay on the PC.
 //
 //   framewall-vr                 stream the default preset (see below)
 //   framewall-vr "APP"           stream this wall preset (app name, or part of one)
 //   framewall-vr --list          list the host's apps
 //   framewall-vr --quit          close the wall on the host (removes the virtual monitors)
 //
-//   options: --host NAME  --bitrate KBPS  --seconds N  --window / --no-window
-//            --dump FILE.ppm (save one converted frame, for testing)
+//   options: --host NAME  --bitrate KBPS  --seconds N  --no-audio  --no-quit
+//            --passthrough (the room instead of the void)
 //
 // Settings: ~/.config/framewall-vr.conf (KEY=VALUE, see framewall-vr.conf.example),
 // created on the first run. Panel sizes and placement apply as soon as the file
@@ -30,15 +29,17 @@
 #include "nvhttp.h"
 #include "settings.h"
 #include "video.h"
+#include "wallrender.h"
+#include "xr.h"
 
 #include <Limelight.h>
 #include <SDL3/SDL.h>
 #include <curl/curl.h>
 #include <openssl/rand.h>
-#include <openvr.h>
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <csignal>
 #include <cstdarg>
@@ -52,13 +53,15 @@
 
 namespace {
 
+using clk = std::chrono::steady_clock;
+
 std::atomic<bool> g_stop{false};
 std::atomic<int> g_terminated{1};  // 1 = still running, else the error code
 VideoPipeline *g_video = nullptr;
-std::atomic<const char *> g_status{"connecting"};  // set from several threads
 
-struct Rumble { std::atomic<uint32_t> value{0}; std::atomic<bool> dirty{false}; };
-Rumble g_rumble[4];
+uint64_t now_ms() {
+    return uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(clk::now().time_since_epoch()).count());
+}
 
 // ---- settings -----------------------------------------------------------------
 
@@ -66,18 +69,13 @@ bool ends_with(const std::string &s, const std::string &suffix) {
     return s.size() >= suffix.size() && s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
 }
 
-// Places the panels from the settings' placement and sizes.
-void place_overlays(const Wall &wall, const Settings &s, const std::vector<vr::VROverlayHandle_t> &overlays) {
+std::vector<PanelPose> place(const Wall &wall, const Settings &s) {
     std::vector<float> scales;
     for (const auto &p : wall.panels) scales.push_back(panel_scale(s, p.name));
-    const auto poses = place_panels(wall, s.place, scales);
-    for (size_t i = 0; i < overlays.size() && i < poses.size(); i++) {
-        vr::VROverlay()->SetOverlayWidthInMeters(overlays[i], poses[i].width_m);
-        vr::VROverlay()->SetOverlayTransformAbsolute(overlays[i], vr::TrackingUniverseSeated, &poses[i].transform);
-    }
+    return place_panels(wall, s.place, scales);
 }
 
-bool parse_args(int argc, char **argv, Settings &s) {
+bool parse_args(int argc, char **argv, Settings &s, bool &passthrough) {
     for (int i = 1; i < argc; i++) {
         const std::string a = argv[i];
         auto next = [&]() -> std::string { return i + 1 < argc ? argv[++i] : ""; };
@@ -86,14 +84,12 @@ bool parse_args(int argc, char **argv, Settings &s) {
         else if (a == "--host") s.host = next();
         else if (a == "--bitrate") s.bitrate_kbps = std::atoi(next().c_str());
         else if (a == "--seconds") s.seconds = std::atoi(next().c_str());
-        else if (a == "--dump") s.dump = next();
-        else if (a == "--window") s.window = 1;
-        else if (a == "--no-window") s.window = 0;
         else if (a == "--no-audio") s.audio = false;
         else if (a == "--no-quit") s.quit_on_exit = false;
+        else if (a == "--passthrough") passthrough = true;
         else if (a == "-h" || a == "--help") {
             std::printf("usage: framewall-vr [APP] [--list] [--quit] [--host NAME] [--bitrate KBPS] [--seconds N]\n"
-                        "                    [--window|--no-window] [--no-audio] [--no-quit] [--dump FILE.ppm]\n");
+                        "                    [--no-audio] [--no-quit] [--passthrough]\n");
             std::exit(0);
         } else if (!a.empty() && a[0] != '-') s.app = a;
         else { fwlog("unknown option %s", a.c_str()); return false; }
@@ -107,7 +103,6 @@ std::string lower(std::string s) {
     for (auto &c : s) c = char(std::tolower(static_cast<unsigned char>(c)));
     return s;
 }
-
 
 std::unique_ptr<NvHttp> find_host(const MoonlightConf &mc, const std::string &want, std::string &name, std::string &err) {
     std::vector<std::string> tried;
@@ -171,7 +166,7 @@ void dr_cleanup() { if (g_video) g_video->stop(); }
 int dr_submit(PDECODE_UNIT du) { return g_video ? g_video->submit(du) : DR_OK; }
 
 void cl_stage_failed(int stage, int err) { fwlog("connection: %s failed (error %d)", LiGetStageName(stage), err); }
-void cl_started() { fwlog("connection: started"); g_status = "streaming"; }
+void cl_started() { fwlog("connection: started"); }
 void cl_terminated(int err) {
     fwlog("connection: ended (%s, %d)", err == ML_ERROR_GRACEFUL_TERMINATION ? "host closed the stream" : "error", err);
     g_terminated = err == 1 ? 2 : err;
@@ -187,158 +182,52 @@ void cl_log(const char *fmt, ...) {
     while (n && (buf[n - 1] == '\n' || buf[n - 1] == '\r')) buf[--n] = 0;
     fwlog("moonlight: %s", buf);
 }
-void cl_rumble(unsigned short num, unsigned short low, unsigned short high) {
-    if (num >= 4) return;
-    g_rumble[num].value = (uint32_t(low) << 16) | high;
-    g_rumble[num].dirty = true;
-}
 void cl_status(int status) { fwlog("connection: %s", status == CONN_STATUS_POOR ? "poor (packet loss or high latency)" : "okay"); }
-
-// ---- gamepads (SDL) -----------------------------------------------------------
-
-struct Pad { SDL_Gamepad *g = nullptr; SDL_JoystickID id = 0; };
-Pad g_pads[4];
-
-uint16_t active_mask() {
-    uint16_t m = 0;
-    for (int i = 0; i < 4; i++) if (g_pads[i].g) m |= uint16_t(1 << i);
-    return m;
-}
-
-void send_pad(int i) {
-    SDL_Gamepad *g = g_pads[i].g;
-    if (!g) { LiSendMultiControllerEvent(short(i), short(active_mask()), 0, 0, 0, 0, 0, 0, 0); return; }
-    static const std::pair<SDL_GamepadButton, int> map[] = {
-        {SDL_GAMEPAD_BUTTON_SOUTH, A_FLAG}, {SDL_GAMEPAD_BUTTON_EAST, B_FLAG},
-        {SDL_GAMEPAD_BUTTON_WEST, X_FLAG}, {SDL_GAMEPAD_BUTTON_NORTH, Y_FLAG},
-        {SDL_GAMEPAD_BUTTON_DPAD_UP, UP_FLAG}, {SDL_GAMEPAD_BUTTON_DPAD_DOWN, DOWN_FLAG},
-        {SDL_GAMEPAD_BUTTON_DPAD_LEFT, LEFT_FLAG}, {SDL_GAMEPAD_BUTTON_DPAD_RIGHT, RIGHT_FLAG},
-        {SDL_GAMEPAD_BUTTON_LEFT_SHOULDER, LB_FLAG}, {SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, RB_FLAG},
-        {SDL_GAMEPAD_BUTTON_START, PLAY_FLAG}, {SDL_GAMEPAD_BUTTON_BACK, BACK_FLAG},
-        {SDL_GAMEPAD_BUTTON_LEFT_STICK, LS_CLK_FLAG}, {SDL_GAMEPAD_BUTTON_RIGHT_STICK, RS_CLK_FLAG},
-        {SDL_GAMEPAD_BUTTON_GUIDE, SPECIAL_FLAG},
-    };
-    int buttons = 0;
-    for (auto &[b, f] : map) if (SDL_GetGamepadButton(g, b)) buttons |= f;
-    auto axis = [&](SDL_GamepadAxis a) { return int(SDL_GetGamepadAxis(g, a)); };
-    auto trig = [&](SDL_GamepadAxis a) { return (unsigned char)std::clamp(axis(a) * 255 / 32767, 0, 255); };
-    auto inv = [&](SDL_GamepadAxis a) { return short(std::clamp(-axis(a), -32768, 32767)); };  // GameStream: up = +
-    LiSendMultiControllerEvent(short(i), short(active_mask()), buttons,
-                               trig(SDL_GAMEPAD_AXIS_LEFT_TRIGGER), trig(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER),
-                               short(axis(SDL_GAMEPAD_AXIS_LEFTX)), inv(SDL_GAMEPAD_AXIS_LEFTY),
-                               short(axis(SDL_GAMEPAD_AXIS_RIGHTX)), inv(SDL_GAMEPAD_AXIS_RIGHTY));
-}
-
-int pad_index(SDL_JoystickID id) {
-    for (int i = 0; i < 4; i++) if (g_pads[i].g && g_pads[i].id == id) return i;
-    return -1;
-}
-
-void handle_pad_event(const SDL_Event &e) {
-    switch (e.type) {
-    case SDL_EVENT_GAMEPAD_ADDED: {
-        if (pad_index(e.gdevice.which) >= 0) return;
-        int slot = -1;
-        for (int i = 0; i < 4; i++) if (!g_pads[i].g) { slot = i; break; }
-        if (slot < 0) return;
-        SDL_Gamepad *g = SDL_OpenGamepad(e.gdevice.which);
-        if (!g) return;
-        g_pads[slot] = {g, e.gdevice.which};
-        fwlog("gamepad %d: %s", slot, SDL_GetGamepadName(g));
-        LiSendControllerArrivalEvent(uint8_t(slot), active_mask(), LI_CTYPE_XBOX,
-                                     A_FLAG | B_FLAG | X_FLAG | Y_FLAG | UP_FLAG | DOWN_FLAG | LEFT_FLAG | RIGHT_FLAG |
-                                         LB_FLAG | RB_FLAG | PLAY_FLAG | BACK_FLAG | LS_CLK_FLAG | RS_CLK_FLAG | SPECIAL_FLAG,
-                                     LI_CCAP_ANALOG_TRIGGERS | LI_CCAP_RUMBLE);
-        send_pad(slot);
-        break;
-    }
-    case SDL_EVENT_GAMEPAD_REMOVED: {
-        const int i = pad_index(e.gdevice.which);
-        if (i < 0) return;
-        SDL_CloseGamepad(g_pads[i].g);
-        g_pads[i] = {};
-        fwlog("gamepad %d: removed", i);
-        send_pad(i);
-        break;
-    }
-    case SDL_EVENT_GAMEPAD_AXIS_MOTION:
-    case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
-    case SDL_EVENT_GAMEPAD_BUTTON_UP: {
-        const int i = pad_index(e.type == SDL_EVENT_GAMEPAD_AXIS_MOTION ? e.gaxis.which : e.gbutton.which);
-        if (i >= 0) send_pad(i);
-        break;
-    }
-    default: break;
-    }
-}
-
-void apply_rumble() {
-    for (int i = 0; i < 4; i++) {
-        if (!g_rumble[i].dirty.exchange(false) || !g_pads[i].g) continue;
-        const uint32_t v = g_rumble[i].value;
-        SDL_RumbleGamepad(g_pads[i].g, uint16_t(v >> 16), uint16_t(v), v ? 10000 : 0);
-    }
-}
-
-void draw_window(SDL_Renderer *r, const std::string &app) {
-    SDL_SetRenderDrawColor(r, 16, 18, 24, 255);
-    SDL_RenderClear(r);
-    SDL_SetRenderScale(r, 2, 2);
-    SDL_SetRenderDrawColor(r, 230, 232, 240, 255);
-    SDL_RenderDebugText(r, 8, 8, "framewall");
-    SDL_SetRenderDrawColor(r, 160, 168, 184, 255);
-    char line[160];
-    std::snprintf(line, sizeof line, "%s%s", g_status.load(),
-                  g_video && g_video->stats.fps ? (", " + std::to_string(g_video->stats.fps.load()) + " fps").c_str() : "");
-    SDL_RenderDebugText(r, 8, 24, line);
-    SDL_RenderDebugText(r, 8, 36, app.substr(0, 48).c_str());
-    std::snprintf(line, sizeof line, "gamepads: %d", __builtin_popcount(active_mask()));
-    SDL_RenderDebugText(r, 8, 48, line);
-    SDL_RenderDebugText(r, 8, 64, "Close this to stop the stream.");
-    SDL_SetRenderScale(r, 1, 1);
-    SDL_RenderPresent(r);
-}
 
 void on_signal(int) { g_stop = true; }
 
-// SteamVR compositor health: head-motion stutter is the compositor missing
-// vsync (an old frame scanned out again), not the stream's fps. Polled from
-// the main loop (every ~20 ms) over the last few frames, logged every 5 s.
-class CompositorWatch {
-public:
-    void poll() {
-        if (!vr::VRCompositor()) return;
-        vr::Compositor_FrameTiming t[16];
-        for (auto &x : t) x.m_nSize = sizeof x;
-        const uint32_t n = vr::VRCompositor()->GetFrameTimings(t, 16);
-        for (uint32_t i = 0; i < n; i++) {
-            if (have_last_ && int32_t(t[i].m_nFrameIndex - last_) <= 0) continue;
-            frames_++;
-            dropped_ += t[i].m_nNumDroppedFrames;
-            mispresented_ += t[i].m_nNumMisPresented ? 1 : 0;
-            gpu_sum_ += t[i].m_flCompositorRenderGpuMs;
-            gpu_max_ = std::max(gpu_max_, t[i].m_flCompositorRenderGpuMs);
-            total_max_ = std::max(total_max_, t[i].m_flTotalRenderGpuMs);
-        }
-        for (uint32_t i = 0; i < n; i++)
-            if (!have_last_ || int32_t(t[i].m_nFrameIndex - last_) > 0) { last_ = t[i].m_nFrameIndex; have_last_ = true; }
-        const uint64_t now = SDL_GetTicks();
-        if (now - since_ >= 5000) {
-            if (frames_)
-                fwlog("compositor: %u frames, %u dropped, %u mispresented, gpu %.2f ms avg / %.2f max, total gpu %.2f max",
-                      frames_, dropped_, mispresented_, gpu_sum_ / frames_, gpu_max_, total_max_);
-            frames_ = dropped_ = mispresented_ = 0;
-            gpu_sum_ = gpu_max_ = total_max_ = 0;
-            since_ = now;
-        }
-    }
+// Frame pacing and conversion cost, logged every 5 s.
+struct FrameStats {
+    uint64_t frames = 0, missed = 0, converted = 0;
+    double gpu_sum = 0, gpu_max = 0, lat_sum = 0;
+    XrTime last_display = 0;
+    clk::time_point since = clk::now();
 
-private:
-    uint32_t last_ = 0, frames_ = 0, dropped_ = 0, mispresented_ = 0;
-    bool have_last_ = false;
-    float gpu_sum_ = 0, gpu_max_ = 0, total_max_ = 0;
-    uint64_t since_ = 0;
+    void frame(const XrFrameState &fs) {
+        frames++;
+        if (last_display && fs.predictedDisplayTime - last_display > fs.predictedDisplayPeriod * 3 / 2)
+            missed += uint64_t((fs.predictedDisplayTime - last_display + fs.predictedDisplayPeriod / 2) / fs.predictedDisplayPeriod) - 1;
+        last_display = fs.predictedDisplayTime;
+    }
+    void converted_one(double gpu_ms, clk::time_point decoded_at) {
+        converted++;
+        gpu_sum += gpu_ms;
+        gpu_max = std::max(gpu_max, gpu_ms);
+        lat_sum += std::chrono::duration<double, std::milli>(clk::now() - decoded_at).count();
+    }
+    void maybe_log(const VideoPipeline &v) {
+        const auto now = clk::now();
+        if (now - since < std::chrono::seconds(5)) return;
+        const double secs = std::chrono::duration<double>(now - since).count();
+        fwlog("xr: %.0f fps, %llu missed | video: %.0f fps shown, decoded->on wall %.1f ms, convert gpu %.2f avg / %.2f max "
+              "(received %llu, decoded %llu, errors %llu, dropped %llu)",
+              frames / secs, (unsigned long long)missed, converted / secs, converted ? lat_sum / converted : 0.0,
+              converted ? gpu_sum / converted : 0.0, gpu_max, (unsigned long long)v.stats.received.load(),
+              (unsigned long long)v.stats.decoded.load(), (unsigned long long)v.stats.errors.load(),
+              (unsigned long long)v.stats.dropped.load());
+        const XrTime keep = last_display;
+        *this = FrameStats{};
+        last_display = keep;
+    }
 };
+
+// Hands the newest decoded frame straight back (while nothing is drawn).
+void skip_frame(VideoPipeline &video) {
+    int idx;
+    uint64_t gen;
+    clk::time_point at;
+    if (video.take(idx, gen, at)) video.give_back(idx, gen);
+}
 
 }  // namespace
 
@@ -346,8 +235,8 @@ int main(int argc, char **argv) {
     setvbuf(stderr, nullptr, _IOLBF, 0);
     Settings s;
     load_settings(s);
-    if (!parse_args(argc, argv, s)) return 2;
-    if (s.window < 0) s.window = (std::getenv("SteamGameId") || std::getenv("SteamAppId")) ? 1 : 0;
+    bool passthrough = false;
+    if (!parse_args(argc, argv, s, passthrough)) return 2;
     std::signal(SIGINT, on_signal);
     std::signal(SIGTERM, on_signal);
     std::signal(SIGHUP, on_signal);
@@ -376,54 +265,35 @@ int main(int argc, char **argv) {
     fwlog("host: %s at %s (Sunshine %s)", host_name.c_str(), http->address().c_str(), info.appversion.c_str());
     if (!(info.codec_modes & SCM_HEVC)) { fwlog("the host can't encode HEVC"); return 1; }
 
-    // SDL before anything that might fail later, so errors can be shown.
-    SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
-    SDL_InitFlags sdl_flags = s.audio ? SDL_INIT_AUDIO : 0;
-    // Only open a window (and take gamepads) when Steam launched us: Steam
-    // gives controller input to the focused window of the game it launched.
-    // From a shell (e.g. ssh) there is no window, so nothing is drawn into the
-    // headset's session.
-    if (s.window) sdl_flags |= SDL_INIT_VIDEO | SDL_INIT_GAMEPAD;
-    if (sdl_flags && !SDL_Init(sdl_flags)) {
-        fwlog("SDL: %s", SDL_GetError());
-        if (s.window) { s.window = 0; SDL_Init(s.audio ? SDL_INIT_AUDIO : 0); }
+    if (s.audio && !SDL_Init(SDL_INIT_AUDIO)) {
+        fwlog("SDL audio: %s; continuing without sound", SDL_GetError());
+        s.audio = false;
     }
 
-    vr::EVRInitError verr = vr::VRInitError_None;
-    vr::VR_Init(&verr, vr::VRApplication_Overlay);
-    if (verr != vr::VRInitError_None) { fwlog("SteamVR: %s", vr::VR_GetVRInitErrorAsEnglishDescription(verr)); return 1; }
-    float hmd_hz = vr::VRSystem()->GetFloatTrackedDeviceProperty(vr::k_unTrackedDeviceIndex_Hmd, vr::Prop_DisplayFrequency_Float);
+    Xr xr;
+    if (!xr.init(err)) { fwlog("xr: %s", err.c_str()); return 1; }
+    if (passthrough && !xr.passthrough_supported()) { fwlog("xr: this headset offers no passthrough"); passthrough = false; }
+    float hmd_hz = xr.refresh_rate();
     if (!(hmd_hz > 1)) hmd_hz = 90;
 
     const NvApp *app = pick_app(apps, s.app, hmd_hz, err);
     Wall wall;
-    if (!app || !parse_wall(app->title, wall, err)) { fwlog("%s", err.c_str()); vr::VR_Shutdown(); return 1; }
+    if (!app || !parse_wall(app->title, wall, err)) { fwlog("%s", err.c_str()); return 1; }
     fwlog("wall: \"%s\", %zu panels, headset at %.0f Hz", app->title.c_str(), wall.panels.size(), hmd_hz);
-
-    // One overlay per monitor, all showing the same texture with different
-    // bounds. Not forced interactive: that would take the controllers away
-    // from gamepad mode (the laser reaches them with the Steam menu open).
-    VideoPipeline::Options vopt;
+    if (std::fabs(wall.hz - hmd_hz) > 1) xr.request_refresh_rate(float(wall.hz));
+    std::vector<Rect> regions;
     for (size_t i = 0; i < wall.panels.size(); i++) {
-        vr::VROverlayHandle_t h = vr::k_ulOverlayHandleInvalid;
-        const std::string key = "framewall." + std::to_string(getpid()) + "." + std::to_string(i);
-        if (vr::VROverlay()->CreateOverlay(key.c_str(), wall.panels[i].name.c_str(), &h) != vr::VROverlayError_None) {
-            fwlog("SteamVR: can't create overlay %s", key.c_str());
-            vr::VR_Shutdown();
-            return 1;
-        }
-        // Above other world overlays, e.g. the theater screen Steam makes for
-        // our status window, which could otherwise cover the middle panel.
-        vr::VROverlay()->SetOverlaySortOrder(h, 10);
-        vopt.overlays.push_back(h);
-        vopt.regions.push_back(wall.panels[i].src);
+        regions.push_back(wall.panels[i].src);
         const Rect &r = wall.panels[i].src;
         fwlog("panel %zu \"%s\": stream %dx%d+%d+%d", i, wall.panels[i].name.c_str(), r.w, r.h, r.x, r.y);
     }
-    vopt.dump_path = s.dump;
-    VideoPipeline video(vopt);
+
+    WallRenderer renderer(xr);
+    if (!renderer.init(wall.width, wall.height, err)) { fwlog("wall: %s", err.c_str()); return 1; }
+    VideoPipeline video(VideoPipeline::Options{});
     g_video = &video;
-    place_overlays(wall, s, vopt.overlays);
+
+    std::vector<PanelPose> poses = place(wall, s);
     long long conf_mtime = settings_mtime();
     uint64_t last_conf_check = 0;
     // The panel editor on the PC: Sunshine's port + 5 at the host's address.
@@ -437,15 +307,6 @@ int main(int argc, char **argv) {
         conf_mtime = settings_mtime();  // our own write: no reload
     };
 
-    SDL_Window *win = nullptr;
-    SDL_Renderer *ren = nullptr;
-    if (s.window) {
-        win = SDL_CreateWindow("framewall", 640, 176, 0);
-        // Software rendering: keeps SDL off the GPU and away from our EGL context.
-        ren = win ? SDL_CreateRenderer(win, "software") : nullptr;
-        if (!ren) fwlog("SDL window: %s", SDL_GetError());
-    }
-
     // Start (or resume) the wall on the host.
     unsigned char rikey[16], riiv[4];
     RAND_bytes(rikey, sizeof rikey);
@@ -457,12 +318,9 @@ int main(int argc, char **argv) {
         info.current_game = 0;
     }
     const bool resume = info.current_game == app->id;
-    g_status = resume ? "resuming the wall" : "starting the wall";
-    if (ren) draw_window(ren, app->title);
     std::string rtsp;
     if (!http->launch(resume, app->id, wall.width, wall.height, wall.hz, AUDIO_CONFIGURATION_STEREO, rikey, rikeyid, rtsp, err)) {
         fwlog("host: %s failed: %s", resume ? "resume" : "launch", err.c_str());
-        vr::VR_Shutdown();
         return 1;
     }
 
@@ -500,7 +358,6 @@ int main(int argc, char **argv) {
     cl.connectionStarted = cl_started;
     cl.connectionTerminated = cl_terminated;
     cl.logMessage = cl_log;
-    cl.rumble = cl_rumble;
     cl.connectionStatusUpdate = cl_status;
     DECODER_RENDERER_CALLBACKS dr;
     LiInitializeVideoCallbacks(&dr);
@@ -513,40 +370,22 @@ int main(int argc, char **argv) {
     if (s.audio) ar = audio_callbacks();
 
     fwlog("connecting: %dx%d@%d, %d kbps%s", sc.width, sc.height, sc.fps, sc.bitrate, s.audio ? "" : ", no audio");
-    g_status = "connecting";
     if (LiStartConnection(&si, &sc, &cl, &dr, &ar, &video, 0, nullptr, 0) != 0) {
         fwlog("connection failed");
         if (s.quit_on_exit && !http->quit(err)) fwlog("host: quit failed: %s", err.c_str());
-        vr::VR_Shutdown();
         return 1;
     }
 
-    const auto t0 = SDL_GetTicks();
-    uint64_t last_draw = 0;
-    bool checked_visible = false;
-    CompositorWatch compositor;
-    while (!g_stop) {
-        compositor.poll();
-        if (s.window) {
-            SDL_Event e;
-            if (SDL_WaitEventTimeout(&e, 20)) {
-                do {
-                    if (e.type == SDL_EVENT_QUIT || e.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) g_stop = true;
-                    else handle_pad_event(e);
-                } while (SDL_PollEvent(&e));
-            }
-            apply_rumble();
-            if (ren && SDL_GetTicks() - last_draw > 500) { draw_window(ren, app->title); last_draw = SDL_GetTicks(); }
-        } else {
-            usleep(20000);
-        }
-        vr::VREvent_t ev;
-        while (vr::VRSystem()->PollNextEvent(&ev, sizeof ev)) {
-            if (ev.eventType == vr::VREvent_Quit) {
-                fwlog("SteamVR is quitting");
-                vr::VRSystem()->AcknowledgeQuit_Exiting();
-                g_stop = true;
-            }
+    // ---- the frame loop ----
+    const uint64_t t0 = now_ms();
+    bool exit_requested = false;
+    FrameStats stats;
+    std::vector<XrCompositionLayerBaseHeader *> layers;
+    const XrEnvironmentBlendMode blend = passthrough ? XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND : XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+    while (xr.poll()) {
+        if (g_stop && !exit_requested) {
+            exit_requested = true;
+            xr.request_exit();
         }
         // The panel editor: send it the settings when it connects, and move
         // the panels as its sliders move. Its changes go into the settings
@@ -561,12 +400,12 @@ int main(int argc, char **argv) {
                 if (set_panel_setting(s, k, v)) { unsaved[k] = v; moved = true; }
                 else fwlog("panel editor: ignoring %s %s", k.c_str(), v.c_str());
             }
-            if (moved) { place_overlays(wall, s, vopt.overlays); last_edit = SDL_GetTicks(); }
-            if (!unsaved.empty() && SDL_GetTicks() - last_edit > 1000) save_edits();
+            if (moved) { poses = place(wall, s); last_edit = now_ms(); }
+            if (!unsaved.empty() && now_ms() - last_edit > 1000) save_edits();
         }
         // Settings file saved: move the panels to match.
-        if (unsaved.empty() && SDL_GetTicks() - last_conf_check > 500) {
-            last_conf_check = SDL_GetTicks();
+        if (unsaved.empty() && now_ms() - last_conf_check > 500) {
+            last_conf_check = now_ms();
             const long long m = settings_mtime();
             if (m && m != conf_mtime) {
                 conf_mtime = m;
@@ -575,24 +414,41 @@ int main(int argc, char **argv) {
                 s.size = fresh.size;
                 s.place = fresh.place;
                 s.panel_size = fresh.panel_size;
-                place_overlays(wall, s, vopt.overlays);
+                poses = place(wall, s);
                 editor.send(editor_snapshot(app->title, wall, s));
                 fwlog("settings: panels updated");
             }
         }
-        if (!checked_visible && video.stats.shown > 0 && SDL_GetTicks() - t0 > 3000) {
-            checked_visible = true;
-            int visible = 0;
-            for (auto h : vopt.overlays) visible += vr::VROverlay()->IsOverlayVisible(h) ? 1 : 0;
-            fwlog("panels visible in SteamVR: %d of %zu", visible, vopt.overlays.size());
+        if (s.seconds > 0 && now_ms() - t0 > uint64_t(s.seconds) * 1000) g_stop = true;
+
+        if (!xr.running()) {
+            skip_frame(video);
+            usleep(10000);
+            continue;
         }
-        if (s.seconds > 0 && SDL_GetTicks() - t0 > uint64_t(s.seconds) * 1000) g_stop = true;
+        XrFrameState fs{XR_TYPE_FRAME_STATE};
+        if (XR_FAILED(xrWaitFrame(xr.session, nullptr, &fs))) { usleep(10000); continue; }
+        xrBeginFrame(xr.session, nullptr);
+        stats.frame(fs);
+        layers.clear();
+        if (fs.shouldRender) {
+            if (renderer.update(video)) stats.converted_one(renderer.last_gpu_ms(), renderer.shown_decoded_at());
+            renderer.layers(fs.predictedDisplayTime, passthrough, poses, regions, s.place.radius, layers);
+        } else {
+            skip_frame(video);
+        }
+        XrFrameEndInfo fe{XR_TYPE_FRAME_END_INFO};
+        fe.displayTime = fs.predictedDisplayTime;
+        fe.environmentBlendMode = blend;
+        fe.layerCount = uint32_t(layers.size());
+        fe.layers = layers.data();
+        const XrResult r = xrEndFrame(xr.session, &fe);
+        if (XR_FAILED(r)) fwlog("xr: xrEndFrame: %s", xr_result_name(xr.instance, r).c_str());
+        stats.maybe_log(video);
     }
 
     fwlog("stopping");
     save_edits();
-    g_status = "stopping";
-    if (ren) draw_window(ren, app->title);
     LiStopConnection();
     g_video = nullptr;
     // Like Moonlight's --quit-after: quitting the app makes the host remove
@@ -601,12 +457,7 @@ int main(int argc, char **argv) {
         if (http->quit(err)) fwlog("host: wall closed");
         else fwlog("host: quit failed: %s", err.c_str());
     }
-    for (auto h : vopt.overlays) vr::VROverlay()->DestroyOverlay(h);
-    for (auto &p : g_pads) if (p.g) SDL_CloseGamepad(p.g);
-    if (ren) SDL_DestroyRenderer(ren);
-    if (win) SDL_DestroyWindow(win);
-    vr::VR_Shutdown();
-    SDL_Quit();
+    if (s.audio) SDL_Quit();
     curl_global_cleanup();
     return g_terminated == 1 || g_terminated == ML_ERROR_GRACEFUL_TERMINATION ? 0 : 1;
 }

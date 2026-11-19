@@ -173,10 +173,6 @@ std::vector<PanelPose> place_panels(const Wall &wall, const Placement &p, const 
         // Arc length cx along the cylinder -> angle to the right of forward.
         pose.theta = cx[i] / p.radius;
         pose.y = p.height - cy[i];
-        const float c = std::cos(-pose.theta), s = std::sin(-pose.theta);
-        pose.transform = vr::HmdMatrix34_t{{{c, 0, s, p.radius * std::sin(pose.theta)},
-                                            {0, 1, 0, pose.y},
-                                            {-s, 0, c, -p.radius * std::cos(pose.theta)}}};
         pose.width_m = w[i];
         pose.height_m = h[i];
         pose.anchor_x = ax[i];

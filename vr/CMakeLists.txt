@@ -1,4 +1,4 @@
-# framewall-vr: the wall as separate VR panels (SteamVR overlay app).
+# framewall-vr: the wall as separate VR panels (native OpenXR app).
 # Built on the headset (Steam Frame, aarch64) by vr/build.sh.
 #
 # Copyright (C) 2026 framewall contributors. GPL-3.0-or-later.
@@ -13,7 +13,7 @@ endif()
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(TP ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
-if(NOT EXISTS ${TP}/moonlight-common-c/CMakeLists.txt OR NOT EXISTS ${TP}/openvr-sdk/headers/openvr.h)
+if(NOT EXISTS ${TP}/moonlight-common-c/CMakeLists.txt OR NOT EXISTS ${TP}/openxr-sdk/CMakeLists.txt)
   message(FATAL_ERROR "third_party/ is missing: run vr/fetch-deps.sh first")
 endif()
 
@@ -23,16 +23,24 @@ add_subdirectory(${TP}/moonlight-common-c EXCLUDE_FROM_ALL)
 # Its -Werror trips over warnings from newer compilers.
 target_compile_options(moonlight-common-c PRIVATE -Wno-error)
 
-# OpenVR: the SDK's prebuilt client library for this architecture.
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
-  set(OPENVR_PLATFORM linuxarm64)
-else()
-  set(OPENVR_PLATFORM linux64)
-endif()
-set(OPENVR_LIB ${TP}/openvr-sdk/bin/${OPENVR_PLATFORM}/libopenvr_api.so)
+# The Khronos OpenXR loader, built from the SDK (it finds SteamVR's runtime).
+set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(BUILD_API_LAYERS OFF CACHE BOOL "" FORCE)
+set(DYNAMIC_LOADER ON CACHE BOOL "" FORCE)
+add_subdirectory(${TP}/openxr-sdk openxr EXCLUDE_FROM_ALL)
+find_package(Vulkan REQUIRED)
+find_program(GLSLC glslc REQUIRED)
+
+# Shaders, compiled to SPIR-V and included in the binary.
+foreach(s wall.vert wall.frag)
+  add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/${s}.inc
+    COMMAND ${GLSLC} -O -mfmt=num ${CMAKE_CURRENT_SOURCE_DIR}/src/${s} -o ${CMAKE_CURRENT_BINARY_DIR}/${s}.inc
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/${s})
+  list(APPEND SHADERS ${CMAKE_CURRENT_BINARY_DIR}/${s}.inc)
+endforeach()
 
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(DEPS REQUIRED IMPORTED_TARGET sdl3 libcurl opus egl glesv2 gbm libdrm openssl)
+pkg_check_modules(DEPS REQUIRED IMPORTED_TARGET sdl3 libcurl opus libdrm openssl)
 
 # The settings file written on the first run, from the example.
 set(CONF_EXAMPLE ${CMAKE_CURRENT_SOURCE_DIR}/../client/framewall-vr.conf.example)
@@ -44,17 +52,18 @@ add_executable(framewall-vr
   src/main.cpp
   src/audio.cpp
   src/control.cpp
-  src/glconvert.cpp
   src/layout.cpp
   src/moonlight_conf.cpp
   src/nvhttp.cpp
   src/settings.cpp
-  src/video.cpp)
+  src/video.cpp
+  src/wallrender.cpp
+  src/xr.cpp
+  ${SHADERS})
 target_compile_options(framewall-vr PRIVATE -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers)
 target_include_directories(framewall-vr PRIVATE
   ${CMAKE_CURRENT_BINARY_DIR}
-  ${TP}/openvr-sdk/headers
   ${TP}/moonlight-common-c/src)
-target_link_libraries(framewall-vr PRIVATE moonlight-common-c PkgConfig::DEPS ${OPENVR_LIB} pthread)
-# libopenvr_api.so is installed next to the binary.
+target_link_libraries(framewall-vr PRIVATE moonlight-common-c PkgConfig::DEPS openxr_loader Vulkan::Vulkan pthread)
+# libopenxr_loader.so is installed next to the binary.
 set_target_properties(framewall-vr PROPERTIES BUILD_RPATH "\$ORIGIN" INSTALL_RPATH "\$ORIGIN" BUILD_WITH_INSTALL_RPATH ON)
