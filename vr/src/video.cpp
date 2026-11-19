@@ -148,6 +148,16 @@ bool VideoPipeline::take(int &index, uint64_t &generation, clk::time_point &deco
     return true;
 }
 
+bool VideoPipeline::wait_take(int &index, uint64_t &generation, clk::time_point &decoded_at, std::chrono::milliseconds timeout) {
+    std::unique_lock<std::mutex> lk(mu_);
+    if (!ready_cv_.wait_for(lk, timeout, [&] { return ready_ >= 0; })) return false;
+    index = ready_;
+    generation = bufs_.generation;
+    decoded_at = ready_at_;
+    ready_ = -1;
+    return true;
+}
+
 void VideoPipeline::give_back(int index, uint64_t generation) {
     {
         std::lock_guard<std::mutex> lk(mu_);
@@ -359,6 +369,7 @@ void VideoPipeline::run() {
                 ready_ = int(b.index);
                 ready_at_ = clk::now();
             }
+            ready_cv_.notify_one();
             if (replaced >= 0) requeue_capture(unsigned(replaced));  // never shown
         }
     }

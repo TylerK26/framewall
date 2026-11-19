@@ -7,7 +7,8 @@
 // Behind them: a dark void (a static projection layer) or, with passthrough,
 // nothing (the room shows through).
 //
-// All calls from the render (main) thread.
+// Frames are converted on the renderer's own thread as soon as they are
+// decoded (start()/stop()); layers() is called from the frame loop.
 //
 // Copyright (C) 2026 framewall contributors. GPL-3.0-or-later.
 #pragma once
@@ -16,8 +17,11 @@
 #include "video.h"
 #include "xr.h"
 
+#include <atomic>
 #include <chrono>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 class WallRenderer {
@@ -28,18 +32,21 @@ public:
     // `width` x `height`: the stream size.
     bool init(int width, int height, std::string &err);
 
-    // Converts the newest decoded frame, if there is one. Before each frame's
-    // layers. Returns true if a new frame was converted.
-    bool update(VideoPipeline &video);
+    // Starts converting `video`'s frames as they are decoded; stop() before
+    // `video` goes away.
+    void start(VideoPipeline &video);
+    void stop();
 
     // This frame's layers, valid until the next call. `poses` and `regions`:
     // one per panel (placement on the cylinder, rectangle in the stream).
+    // Call with xr.queue_mu held (it's part of the frame's begin/end).
     void layers(XrTime display_time, bool passthrough, const std::vector<PanelPose> &poses,
                 const std::vector<Rect> &regions, float radius, std::vector<XrCompositionLayerBaseHeader *> &out);
 
-    double last_gpu_ms() const { return gpu_ms_; }
-    // When the frame now on the wall was decoded.
-    std::chrono::steady_clock::time_point shown_decoded_at() const { return shown_at_; }
+    // Frames converted since the last call: count, GPU time (sum, max) and
+    // decoded -> on-the-wall time (sum), all in ms.
+    struct Stats { uint64_t frames = 0; double gpu_sum = 0, gpu_max = 0, latency_sum = 0; };
+    Stats take_stats();
 
 private:
     struct Imported {
@@ -53,6 +60,8 @@ private:
     bool make_pipeline(std::string &err);
     bool make_void(std::string &err);
     bool import(const DecodedBuffers &b, std::string &err);
+    void run(VideoPipeline *video);
+    bool convert(VideoPipeline &video, int idx, uint64_t gen, std::chrono::steady_clock::time_point decoded_at);
     void drop_imports();
     PFN_vkVoidFunction dev_proc(const char *name) const;
 
@@ -61,7 +70,9 @@ private:
     Xr::Swapchain wall_;
     std::vector<VkImageView> wall_views_;
     std::vector<VkFramebuffer> wall_fbs_;
-    bool has_frame_ = false;
+    std::atomic<bool> has_frame_{false};
+    std::thread thread_;
+    std::atomic<bool> stop_{false};
 
     VkSamplerYcbcrConversion ycbcr_ = VK_NULL_HANDLE;
     VkSampler sampler_ = VK_NULL_HANDLE;
@@ -86,6 +97,6 @@ private:
     XrCompositionLayerProjectionView proj_views_[2];
     std::vector<XrCompositionLayerCylinderKHR> cylinders_;
 
-    double gpu_ms_ = 0;
-    std::chrono::steady_clock::time_point shown_at_{};
+    std::mutex stats_mu_;
+    Stats stats_;
 };

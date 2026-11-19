@@ -26,6 +26,13 @@ ADAPTER=/dev/dri/renderD128
 # instead of ~6 ms per frame, which 144 Hz (6.9 ms per frame) needs.
 #VAAPI_QUALITY=speed
 
+# Forward error correction: the share of extra packets that let the headset
+# rebuild lost ones. Sunshine's default is 20 (%). Over Wi-Fi, short bursts of
+# loss stall the picture until a fresh keyframe arrives (the VA-API encoder
+# can't recover any other way); 40 rides out bigger bursts for ~20% more
+# bandwidth.
+#FEC_PERCENT=40
+
 # Physical screens in the wall. They keep their current arrangement (as one
 # block) and the virtual monitors are added around it.
 #   all            - every physical screen (default)

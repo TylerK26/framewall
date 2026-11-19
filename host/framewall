@@ -30,6 +30,7 @@ SUNSHINE="$HOME/.local/opt/sunshine-wall/bin/sunshine"
 ENCODER=vaapi                            # vaapi | nvenc | vulkan | software
 ADAPTER=""                               # e.g. /dev/dri/renderD128 (empty = Sunshine's choice)
 VAAPI_QUALITY=speed                      # vaapi encoder preset: speed | balanced | quality | auto
+FEC_PERCENT=""                           # error correction share of the stream (empty = Sunshine's 20)
 PHYSICAL=all                             # physical screens in the wall: all | primary |
                                          # "NAME NAME..." | none
 PRESETS=(                                # "COUNT WIDTHxHEIGHT REFRESH LAYOUT"
@@ -331,6 +332,7 @@ output_name = workspace
 encoder = $ENCODER
 ${ADAPTER:+adapter_name = $ADAPTER}
 $([[ "$ENCODER" == vaapi && "$VAAPI_QUALITY" != auto ]] && echo "vaapi_quality = $VAAPI_QUALITY")
+${FEC_PERCENT:+fec_percentage = $FEC_PERCENT}
 system_tray = disabled
 file_apps = $SUNSHINE_DIR/apps.json
 file_state = $SUNSHINE_DIR/state.json

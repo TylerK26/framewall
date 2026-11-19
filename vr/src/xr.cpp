@@ -185,10 +185,12 @@ bool Xr::poll() {
             if (state_ == XR_SESSION_STATE_READY) {
                 XrSessionBeginInfo bi{XR_TYPE_SESSION_BEGIN_INFO};
                 bi.primaryViewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
+                std::lock_guard<std::mutex> lk(queue_mu);
                 const XrResult r = xrBeginSession(session, &bi);
                 if (XR_FAILED(r)) fwlog("xr: xrBeginSession: %s", xr_result_name(instance, r).c_str());
                 else running_ = true;
             } else if (state_ == XR_SESSION_STATE_STOPPING) {
+                std::lock_guard<std::mutex> lk(queue_mu);
                 xrEndSession(session);
                 running_ = false;
             } else if (state_ == XR_SESSION_STATE_EXITING || state_ == XR_SESSION_STATE_LOSS_PENDING) {

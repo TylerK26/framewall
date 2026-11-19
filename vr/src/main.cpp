@@ -199,15 +199,14 @@ struct FrameStats {
             missed += uint64_t((fs.predictedDisplayTime - last_display + fs.predictedDisplayPeriod / 2) / fs.predictedDisplayPeriod) - 1;
         last_display = fs.predictedDisplayTime;
     }
-    void converted_one(double gpu_ms, clk::time_point decoded_at) {
-        converted++;
-        gpu_sum += gpu_ms;
-        gpu_max = std::max(gpu_max, gpu_ms);
-        lat_sum += std::chrono::duration<double, std::milli>(clk::now() - decoded_at).count();
-    }
-    void maybe_log(const VideoPipeline &v) {
+    void maybe_log(const VideoPipeline &v, WallRenderer &r) {
         const auto now = clk::now();
         if (now - since < std::chrono::seconds(5)) return;
+        const WallRenderer::Stats rs = r.take_stats();
+        converted = rs.frames;
+        gpu_sum = rs.gpu_sum;
+        gpu_max = rs.gpu_max;
+        lat_sum = rs.latency_sum;
         const double secs = std::chrono::duration<double>(now - since).count();
         fwlog("xr: %.0f fps, %llu missed | video: %.0f fps shown, decoded->on wall %.1f ms, convert gpu %.2f avg / %.2f max "
               "(received %llu, decoded %llu, errors %llu, dropped %llu)",
@@ -220,14 +219,6 @@ struct FrameStats {
         last_display = keep;
     }
 };
-
-// Hands the newest decoded frame straight back (while nothing is drawn).
-void skip_frame(VideoPipeline &video) {
-    int idx;
-    uint64_t gen;
-    clk::time_point at;
-    if (video.take(idx, gen, at)) video.give_back(idx, gen);
-}
 
 }  // namespace
 
@@ -377,6 +368,9 @@ int main(int argc, char **argv) {
     }
 
     // ---- the frame loop ----
+    // Frames go onto the wall as soon as they're decoded, on the renderer's
+    // thread; this loop just hands SteamVR the layers every display frame.
+    renderer.start(video);
     const uint64_t t0 = now_ms();
     bool exit_requested = false;
     FrameStats stats;
@@ -422,32 +416,31 @@ int main(int argc, char **argv) {
         if (s.seconds > 0 && now_ms() - t0 > uint64_t(s.seconds) * 1000) g_stop = true;
 
         if (!xr.running()) {
-            skip_frame(video);
             usleep(10000);
             continue;
         }
         XrFrameState fs{XR_TYPE_FRAME_STATE};
         if (XR_FAILED(xrWaitFrame(xr.session, nullptr, &fs))) { usleep(10000); continue; }
-        xrBeginFrame(xr.session, nullptr);
         stats.frame(fs);
-        layers.clear();
-        if (fs.shouldRender) {
-            if (renderer.update(video)) stats.converted_one(renderer.last_gpu_ms(), renderer.shown_decoded_at());
-            renderer.layers(fs.predictedDisplayTime, passthrough, poses, regions, s.place.radius, layers);
-        } else {
-            skip_frame(video);
+        XrResult r;
+        {
+            std::lock_guard<std::mutex> lk(xr.queue_mu);
+            xrBeginFrame(xr.session, nullptr);
+            layers.clear();
+            if (fs.shouldRender) renderer.layers(fs.predictedDisplayTime, passthrough, poses, regions, s.place.radius, layers);
+            XrFrameEndInfo fe{XR_TYPE_FRAME_END_INFO};
+            fe.displayTime = fs.predictedDisplayTime;
+            fe.environmentBlendMode = blend;
+            fe.layerCount = uint32_t(layers.size());
+            fe.layers = layers.data();
+            r = xrEndFrame(xr.session, &fe);
         }
-        XrFrameEndInfo fe{XR_TYPE_FRAME_END_INFO};
-        fe.displayTime = fs.predictedDisplayTime;
-        fe.environmentBlendMode = blend;
-        fe.layerCount = uint32_t(layers.size());
-        fe.layers = layers.data();
-        const XrResult r = xrEndFrame(xr.session, &fe);
         if (XR_FAILED(r)) fwlog("xr: xrEndFrame: %s", xr_result_name(xr.instance, r).c_str());
-        stats.maybe_log(video);
+        stats.maybe_log(video, renderer);
     }
 
     fwlog("stopping");
+    renderer.stop();
     save_edits();
     LiStopConnection();
     g_video = nullptr;

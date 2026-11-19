@@ -14,6 +14,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <deque>
 #include <mutex>
@@ -57,6 +58,9 @@ public:
     // The newest decoded frame not yet taken: buffer index and generation,
     // or false. Older untaken frames go straight back to the decoder.
     bool take(int &index, uint64_t &generation, std::chrono::steady_clock::time_point &decoded_at);
+    // Like take(), but waits up to `timeout` for a frame.
+    bool wait_take(int &index, uint64_t &generation, std::chrono::steady_clock::time_point &decoded_at,
+                   std::chrono::milliseconds timeout);
     // Hands a taken buffer back to the decoder.
     void give_back(int index, uint64_t generation);
 
@@ -82,6 +86,7 @@ private:
     std::atomic<bool> need_idr_{false};
 
     std::mutex mu_;           // guards the access-unit queue and the handoff below
+    std::condition_variable ready_cv_;
     std::deque<Au> queue_;
     DecodedBuffers bufs_;     // current buffer set
     int ready_ = -1;          // newest decoded, not yet taken

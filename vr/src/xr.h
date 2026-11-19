@@ -12,6 +12,8 @@
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
 
+#include <atomic>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -59,11 +61,17 @@ public:
     VkQueue vk_queue = VK_NULL_HANDLE;
     float vk_timestamp_period = 1;   // ns per timestamp tick
 
+    // The Vulkan queue is shared with the runtime, which may use it in
+    // xrBeginFrame/xrEndFrame and the swapchain calls: hold this around those
+    // and around our own submits (frames are converted on their own thread).
+    std::mutex queue_mu;
+
 private:
     template <class T> T proc(const char *name) const;
 
     XrSessionState state_ = XR_SESSION_STATE_UNKNOWN;
-    bool running_ = false, exiting_ = false;
+    std::atomic<bool> running_{false};
+    bool exiting_ = false;
     bool alpha_blend_ = false, have_refresh_ = false;
 };
 

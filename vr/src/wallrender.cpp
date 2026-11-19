@@ -5,6 +5,7 @@
 
 #include <drm_fourcc.h>
 
+#include <algorithm>
 #include <cmath>
 #include <unistd.h>
 
@@ -39,6 +40,7 @@ uint32_t mem_type(VkPhysicalDevice phys, uint32_t bits, VkMemoryPropertyFlags wa
 PFN_vkVoidFunction WallRenderer::dev_proc(const char *name) const { return vkGetDeviceProcAddr(xr_.vk_device, name); }
 
 WallRenderer::~WallRenderer() {
+    stop();
     VkDevice d = xr_.vk_device;
     if (!d) return;
     vkDeviceWaitIdle(d);
@@ -382,34 +384,66 @@ void WallRenderer::drop_imports() {
     bufs_ = DecodedBuffers{};
 }
 
-bool WallRenderer::update(VideoPipeline &video) {
-    VkDevice d = xr_.vk_device;
-    DecodedBuffers nb;
-    if (video.buffers_if_changed(bufs_.generation, nb)) {
-        vkQueueWaitIdle(xr_.vk_queue);
-        drop_imports();
-        if (nb.generation) {
-            std::string err;
-            if (!import(nb, err)) {
-                fwlog("wall: %s", err.c_str());
-                drop_imports();
-                for (int fd : nb.fds)
-                    if (fd >= 0) close(fd);
+void WallRenderer::start(VideoPipeline &video) {
+    stop_ = false;
+    thread_ = std::thread(&WallRenderer::run, this, &video);
+}
+
+void WallRenderer::stop() {
+    stop_ = true;
+    if (thread_.joinable()) thread_.join();
+}
+
+WallRenderer::Stats WallRenderer::take_stats() {
+    std::lock_guard<std::mutex> lk(stats_mu_);
+    Stats s = stats_;
+    stats_ = Stats{};
+    return s;
+}
+
+void WallRenderer::run(VideoPipeline *video) {
+    using namespace std::chrono_literals;
+    while (!stop_) {
+        DecodedBuffers nb;
+        if (video->buffers_if_changed(bufs_.generation, nb)) {
+            {
+                std::lock_guard<std::mutex> lk(xr_.queue_mu);
+                vkQueueWaitIdle(xr_.vk_queue);
+            }
+            drop_imports();
+            if (nb.generation) {
+                std::string err;
+                if (!import(nb, err)) {
+                    fwlog("wall: %s", err.c_str());
+                    drop_imports();
+                    for (int fd : nb.fds)
+                        if (fd >= 0) close(fd);
+                }
             }
         }
+        int idx = -1;
+        uint64_t gen = 0;
+        std::chrono::steady_clock::time_point decoded_at;
+        if (!video->wait_take(idx, gen, decoded_at, 20ms)) continue;
+        // Nothing on screen (headset off, app hidden): just recycle it.
+        if (!xr_.running() || gen != bufs_.generation || idx < 0 || size_t(idx) >= imports_.size()) {
+            video->give_back(idx, gen);
+            continue;
+        }
+        convert(*video, idx, gen, decoded_at);
     }
-    int idx = -1;
-    uint64_t gen = 0;
-    std::chrono::steady_clock::time_point decoded_at;
-    if (!video.take(idx, gen, decoded_at)) return false;
-    if (gen != bufs_.generation || idx < 0 || size_t(idx) >= imports_.size()) {
-        video.give_back(idx, gen);
-        return false;
-    }
+}
 
+bool WallRenderer::convert(VideoPipeline &video, int idx, uint64_t gen, std::chrono::steady_clock::time_point decoded_at) {
+    VkDevice d = xr_.vk_device;
     uint32_t wi = 0;
     XrSwapchainImageAcquireInfo ai{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
-    if (XR_FAILED(xrAcquireSwapchainImage(wall_.handle, &ai, &wi))) { video.give_back(idx, gen); return false; }
+    XrResult xres;
+    {
+        std::lock_guard<std::mutex> lk(xr_.queue_mu);
+        xres = xrAcquireSwapchainImage(wall_.handle, &ai, &wi);
+    }
+    if (XR_FAILED(xres)) { video.give_back(idx, gen); return false; }
     XrSwapchainImageWaitInfo wwi{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
     wwi.timeout = XR_INFINITE_DURATION;
     xrWaitSwapchainImage(wall_.handle, &wwi);
@@ -459,23 +493,37 @@ bool WallRenderer::update(VideoPipeline &video) {
     VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
     si.commandBufferCount = 1;
     si.pCommandBuffers = &cmd_;
-    const VkResult r = vkQueueSubmit(xr_.vk_queue, 1, &si, fence_);
+    VkResult r;
+    {
+        std::lock_guard<std::mutex> lk(xr_.queue_mu);
+        r = vkQueueSubmit(xr_.vk_queue, 1, &si, fence_);
+    }
+    double gpu_ms = 0;
     if (r == VK_SUCCESS) {
         vkWaitForFences(d, 1, &fence_, VK_TRUE, UINT64_MAX);
         vkResetFences(d, 1, &fence_);
         uint64_t ts[2];
         if (vkGetQueryPoolResults(d, queries_, 0, 2, sizeof ts, ts, 8, VK_QUERY_RESULT_64_BIT) == VK_SUCCESS)
-            gpu_ms_ = double(ts[1] - ts[0]) * xr_.vk_timestamp_period / 1e6;
+            gpu_ms = double(ts[1] - ts[0]) * xr_.vk_timestamp_period / 1e6;
     } else {
         fwlog("wall: submit failed (%d)", int(r));
     }
     video.give_back(idx, gen);
     XrSwapchainImageReleaseInfo ri{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
-    xrReleaseSwapchainImage(wall_.handle, &ri);
+    {
+        std::lock_guard<std::mutex> lk(xr_.queue_mu);
+        xrReleaseSwapchainImage(wall_.handle, &ri);
+    }
     if (r != VK_SUCCESS) return false;
     has_frame_ = true;
-    shown_at_ = decoded_at;
     video.stats.shown++;
+    {
+        std::lock_guard<std::mutex> lk(stats_mu_);
+        stats_.frames++;
+        stats_.gpu_sum += gpu_ms;
+        stats_.gpu_max = std::max(stats_.gpu_max, gpu_ms);
+        stats_.latency_sum += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - decoded_at).count();
+    }
     return true;
 }
 
