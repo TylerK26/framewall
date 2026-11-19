@@ -306,9 +306,9 @@ bool Pointer::update(XrTime t, const std::vector<PanelPose> &poses, const std::v
         bumper_now[i] = bumper;
         right_now[i] = boolean(right_);
         // Gamepad buttons, wherever SteamVR bound them.
-        // (SteamVR reports the Frame's X and Y the other way round from the
-        // Xbox buttons a gamepad tester shows for them: swapped here.)
-        const std::pair<XrAction, int> pad_map[] = {{a_, A_FLAG}, {b_, B_FLAG}, {x_, Y_FLAG}, {y_, X_FLAG},
+        // (Checked in games: the Frame's X and Y are the Xbox X and Y. Some
+        // browser gamepad testers show them swapped.)
+        const std::pair<XrAction, int> pad_map[] = {{a_, A_FLAG}, {b_, B_FLAG}, {x_, X_FLAG}, {y_, Y_FLAG},
                                                     {up_, UP_FLAG}, {down_, DOWN_FLAG}, {leftd_, LEFT_FLAG},
                                                     {rightd_, RIGHT_FLAG}, {start_, PLAY_FLAG}, {back_, BACK_FLAG}};
         for (const auto &[act, flag] : pad_map)
