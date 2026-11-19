@@ -1,6 +1,6 @@
 # framewall
 
-**DISCLAIMER: This whole repository is vibecoded, and while I have some programming experience, I did not review everything that claude wrote, proceed with caution and I am not responsible for any damages caused to your computer or your headset.**
+**DISCLAIMER: This whole repository is vibecoded, I have not reviewed everything that claude wrote, proceed with caution and I am not responsible for any damages caused to your computer or your headset.**
 
 Stream your Linux desktop to a VR headset as a **monitor wall**: your real
 screens plus any number of **virtual monitors**, captured together as **one**
