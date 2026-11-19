@@ -2,12 +2,14 @@
 # Fetch framewall-vr's dependencies into vr/third_party at tested versions:
 #   moonlight-common-c  Moonlight's streaming protocol library (GPL-3.0)
 #   openvr-sdk          Valve's OpenVR headers and client library (BSD-3)
+#   openxr-sdk          Khronos OpenXR headers and loader (Apache-2.0)
 #
 # Copyright (C) 2026 framewall contributors. GPL-3.0-or-later.
 set -euo pipefail
 
 MOONLIGHT_COMMON_C=e80a786afedeaccff63e839e68c8f3d8a057c13d
 OPENVR=0924064316de3effbcd1acf1e309182a2deb1c05   # SDK 2.15.6
+OPENXR=f2448a8797c85814aa892efc1ab8707900fbcc78   # release-1.1.63
 
 tp="$(cd "$(dirname "$0")" && pwd)/third_party"
 mkdir -p "$tp"
@@ -25,3 +27,4 @@ fetch() {   # dir url commit
 }
 fetch moonlight-common-c https://github.com/moonlight-stream/moonlight-common-c.git "$MOONLIGHT_COMMON_C"
 fetch openvr-sdk https://github.com/ValveSoftware/openvr.git "$OPENVR"
+fetch openxr-sdk https://github.com/KhronosGroup/OpenXR-SDK.git "$OPENXR"

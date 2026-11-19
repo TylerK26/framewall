@@ -3,3 +3,5 @@ vr/build-*/
 vr/third_party/
 vr/compile_commands.json
 __pycache__/
+vr/spike/build/
+vr/spike/build-*/
