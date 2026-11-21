@@ -156,7 +156,11 @@ It picks the host's preset matching the headset's refresh rate.
   hands. Shift, Ctrl, Alt and Meta are sticky: tap once for the next key
   only, tap twice quickly to lock one (tap again to release it), e.g. lock
   Alt and tap Tab to switch windows. The laser controller still drives the
-  mouse when it points at the panels instead. Hide closes it.
+  mouse when it points at the panels instead. Hide closes it. To move it,
+  pull on the bar under the keys: it follows that controller's laser (turned
+  to face you) until you let go, and that controller's thumbstick pushes it
+  away (forward) or pulls it closer (back). Shown again, it comes back where
+  you left it, or low in front of you if you've turned well away from it.
 - **Menu** (both grips): passthrough on/off (remembered), recenter the panels
   in front of you, show / hide the keyboard, all panels smaller / bigger, quit (pull twice), and the
   stream's frame rate, latency and connection. While it's open, nothing

@@ -15,12 +15,18 @@ namespace {
 
 constexpr int kUnit = 64, kGap = 6, kMargin = 16;  // pixels: one key, between keys, around them
 constexpr int kCols = 15, kRows = 6;               // in key units
-constexpr int kW = kCols * kUnit + 2 * kMargin, kH = kRows * kUnit + 2 * kMargin;
+constexpr int kKeysH = kRows * kUnit + 2 * kMargin;          // the keys' panel
+constexpr int kBarArea = 44, kBarW = 320, kBarH = 16;         // the move bar, below it on a clear strip
+constexpr int kW = kCols * kUnit + 2 * kMargin, kH = kKeysH + kBarArea;
+constexpr int kBarX = (kW - kBarW) / 2, kBarY = kKeysH + (kBarArea - kBarH) / 2;
 constexpr float kWidthM = 0.56f;      // m
 constexpr float kDistance = 0.6f;     // m in front of the head
 constexpr float kDrop = 0.3f;         // m below eye level
 constexpr float kTilt = 0.52f;        // rad (30°): the top edge leans away, like a desk keyboard
 constexpr uint64_t kLockTapMs = 400;  // a second modifier tap within this locks it
+constexpr float kPushSpeed = 1.2f;    // m/s along the ray, stick fully pushed
+constexpr float kMinDist = 0.2f, kMaxDist = 3.0f;  // m along the ray while moving
+constexpr float kReopenAngle = 1.2f;  // rad (~70°): further off than this, it opens in front again
 
 uint64_t now_ms() {
     using namespace std::chrono;
@@ -136,27 +142,86 @@ void Keyboard::open(XrTime t) {
     if (!ok) return;
     const XrVector3f fwd = rotate(loc.pose.orientation, {0, 0, -1});
     const float yaw = std::atan2(-fwd.x, -fwd.z);
-    const XrVector3f flat{-std::sin(yaw), 0, -std::cos(yaw)};
-    // yaw (about y) * pitch (about x, negative: the top edge away from you)
-    const float sy = std::sin(yaw / 2), cy = std::cos(yaw / 2), sp = std::sin(-kTilt / 2), cp = std::cos(-kTilt / 2);
-    quad_ = {XR_TYPE_COMPOSITION_LAYER_QUAD};
     quad_.space = xr_.space;
     quad_.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+    quad_.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;  // the bar's strip is clear
     quad_.subImage.swapchain = img_.handle;
     quad_.subImage.imageRect = {{0, 0}, {kW, kH}};
-    quad_.pose.orientation = {cy * sp, cp * sy, -sy * sp, cy * cp};
-    quad_.pose.position = {loc.pose.position.x + flat.x * kDistance, loc.pose.position.y - kDrop,
-                           loc.pose.position.z + flat.z * kDistance};
     quad_.size = {kWidthM, kWidthM * kH / kW};
+    // Where it was left, if that's still roughly where you're looking.
+    bool keep = false;
+    if (moved_) {
+        const XrVector3f &c = quad_.pose.position, &h = loc.pose.position;
+        float d = std::atan2(-(c.x - h.x), -(c.z - h.z)) - yaw;
+        while (d > float(M_PI)) d -= float(2 * M_PI);
+        while (d < -float(M_PI)) d += float(2 * M_PI);
+        keep = std::fabs(d) < kReopenAngle;
+    }
+    if (!keep) {
+        moved_ = false;
+        orient(yaw, kTilt);
+        // The keys' centre low in front of you (the quad's centre is a bit
+        // lower: the bar's strip hangs under the keys).
+        const XrVector3f flat{-std::sin(yaw), 0, -std::cos(yaw)};
+        const XrVector3f down = rotate(quad_.pose.orientation, {0, -0.5f * kBarArea * kWidthM / kW, 0});
+        quad_.pose.position = {loc.pose.position.x + flat.x * kDistance + down.x, loc.pose.position.y - kDrop + down.y,
+                               loc.pose.position.z + flat.z * kDistance + down.z};
+    }
     open_ = true;
+    move_hand_ = -1;
+    bar_hot_[0] = bar_hot_[1] = false;
     hovered_[0] = hovered_[1] = -1;
     dirty_ = true;
     fwlog("keyboard: shown");
 }
 
+void Keyboard::orient(float yaw, float tilt) {
+    // yaw (about y) * pitch (about x, negative: the top edge away from you)
+    const float sy = std::sin(yaw / 2), cy = std::cos(yaw / 2), sp = std::sin(-tilt / 2), cp = std::cos(-tilt / 2);
+    quad_.pose.orientation = {cy * sp, cp * sy, -sy * sp, cy * cp};
+}
+
+bool Keyboard::on_bar(float u, float v) const {
+    // A generous target: the bar plus some room around it, on the clear strip.
+    const float x = u * kW, y = v * kH;
+    return y >= float(kKeysH) && x >= float(kBarX - 40) && x < float(kBarX + kBarW + 40);
+}
+
+void Keyboard::begin_move(int hand, float u, float v, float dist) {
+    release(hand);
+    move_hand_ = hand;
+    move_u_ = u;
+    move_v_ = v;
+    move_dist_ = dist;
+    dirty_ = true;
+}
+
+void Keyboard::move(XrVector3f o, XrVector3f d, XrVector3f head, float push, float dt) {
+    if (move_hand_ < 0) return;
+    move_dist_ = std::clamp(move_dist_ + push * kPushSpeed * dt, kMinDist, kMaxDist);
+    const XrVector3f p{o.x + d.x * move_dist_, o.y + d.y * move_dist_, o.z + d.z * move_dist_};
+    // Turned to face the head: yaw towards it, tilted to look back at it.
+    const float dx = p.x - head.x, dz = p.z - head.z;
+    const float flat = std::max(std::sqrt(dx * dx + dz * dz), 0.05f);
+    orient(std::atan2(-dx, -dz), std::clamp(std::atan2(head.y - p.y, flat), -1.2f, 1.2f));
+    // The grabbed spot stays under the ray.
+    const XrQuaternionf q = quad_.pose.orientation;
+    const XrVector3f right = rotate(q, {1, 0, 0}), up = rotate(q, {0, 1, 0});
+    const float lx = (move_u_ - 0.5f) * quad_.size.width, ly = (0.5f - move_v_) * quad_.size.height;
+    quad_.pose.position = {p.x - right.x * lx - up.x * ly, p.y - right.y * lx - up.y * ly, p.z - right.z * lx - up.z * ly};
+    moved_ = true;
+}
+
+void Keyboard::end_move() {
+    if (move_hand_ < 0) return;
+    move_hand_ = -1;
+    dirty_ = true;
+}
+
 void Keyboard::close() {
     if (!open_) return;
     release_all();
+    move_hand_ = -1;
     open_ = false;
     fwlog("keyboard: hidden");
 }
@@ -218,7 +283,8 @@ void Keyboard::sync_mods() {
 
 void Keyboard::hover(int hand, float u, float v) {
     const int k = u < 0 ? -1 : key_at(u, v);
-    if (k != hovered_[hand]) { hovered_[hand] = k; dirty_ = true; }
+    const bool bar = u >= 0 && on_bar(u, v);
+    if (k != hovered_[hand] || bar != bar_hot_[hand]) { hovered_[hand] = k; bar_hot_[hand] = bar; dirty_ = true; }
 }
 
 bool Keyboard::press(int hand, float u, float v) {
@@ -296,7 +362,10 @@ void Keyboard::draw() {
         SDL_RenderDebugText(r, tx / scale, ty / scale, s.c_str());
         SDL_SetRenderScale(r, 1, 1);
     };
-    fill(0, 0, kW, kH, 18, 20, 26);
+    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);  // fills write their alpha as is
+    SDL_SetRenderDrawColor(r, 0, 0, 0, 0);
+    SDL_RenderClear(r);                 // clear (premultiplied: all zero)
+    fill(0, 0, kW, kKeysH, 18, 20, 26);
     fill(0, 0, kW, 3, 90, 140, 220);  // accent line, like the menu's
     const bool shift = mods_[kShift].state != 0;
     for (size_t i = 0; i < keys_.size(); i++) {
@@ -317,6 +386,16 @@ void Keyboard::draw() {
             if (letter ? shift != caps_ : shift) s = k.shifted;
         }
         label(s, k, 235);
+    }
+    // The move bar: brighter when pointed at, blue while moving.
+    {
+        const bool hot = bar_hot_[0] || bar_hot_[1];
+        const Uint8 c = hot ? 215 : 135;
+        Uint8 cr = c, cg = Uint8(c + 4), cb = Uint8(std::min(255, c + 12));
+        if (move_hand_ >= 0) cr = 90, cg = 140, cb = 220;
+        fill(kBarX, kBarY, kBarW, kBarH, cr, cg, cb);
+        fill(kBarX - 3, kBarY + 3, 3, kBarH - 6, cr, cg, cb);  // rounded-ish ends
+        fill(kBarX + kBarW, kBarY + 3, 3, kBarH - 6, cr, cg, cb);
     }
     SDL_FlushRenderer(r);
     for (int row = 0; row < kH; row++)

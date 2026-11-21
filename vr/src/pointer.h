@@ -18,7 +18,8 @@
 // The on-screen keyboard (keyboard.h): while it's shown, both controllers
 // point and type on it, and the laser controller still drives the mouse when
 // it points at the panels. While the laser is on (or the keyboard is shown),
-// B or Y shows/hides it.
+// B or Y shows/hides it. A pull on its bar moves it, and that controller's
+// stick pushes it away / pulls it closer.
 //
 // Main thread only (input is read once per display frame).
 //
@@ -116,6 +117,7 @@ private:
     XrVector3f head_{};
     int last_x_ = -1, last_y_ = -1;
     double scroll_acc_[2] = {0, 0};
+    XrTime last_t_ = 0;
 
     Xr::Swapchain dot_img_, ray_img_;
     XrCompositionLayerQuad ray_layers_[2], dot_layers_[2];

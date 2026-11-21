@@ -10,6 +10,11 @@
 //     twice quickly to lock (held down until tapped again), e.g. for Alt+Tab.
 //   - The laser controller keeps driving the mouse whenever it points at the
 //     panels instead of the keyboard.
+//   - The bar under the keys moves it: pull on the bar and the keyboard
+//     follows that controller's ray, turned to face you; its stick pushes the
+//     keyboard away (forward) or pulls it closer (back). Shown again, it comes
+//     back where you left it, unless that's far off to the side of where
+//     you're looking (then it opens low in front of you again).
 //
 // Drawn with SDL's software renderer and built-in 8x8 font, like the menu,
 // and shown as an OpenXR quad layer. Main thread only.
@@ -56,6 +61,17 @@ public:
     bool press(int hand, float u, float v);
     // The pull ended (or the ray left the keyboard): lets its key go.
     void release(int hand);
+
+    // Moving it by the bar under the keys.
+    bool on_bar(float u, float v) const;
+    // A pull on the bar at (u, v), `dist` along the controller's ray.
+    void begin_move(int hand, float u, float v, float dist);
+    // Each frame while the pull lasts: the bar's grabbed spot stays on the
+    // ray, `push` (-1..1) moves it along the ray, the keyboard faces `head`.
+    void move(XrVector3f origin, XrVector3f dir, XrVector3f head, float push, float dt);
+    void end_move();
+    int moving_hand() const { return move_hand_; }  // -1: not moving
+    XrVector3f grab_point() const { return point(move_u_, move_v_); }
     // Lets every key go, the sticky modifiers included.
     void release_all();
 
@@ -86,6 +102,8 @@ private:
     int modifiers() const;
     void sync_mods();                // presses/releases modifier keys to match their state
     void draw();
+    // Faces the quad along `yaw` (about y), tilted back by `tilt`.
+    void orient(float yaw, float tilt);
 
     Xr &xr_;
     Send send_;
@@ -99,6 +117,10 @@ private:
     bool caps_ = false;              // as far as we know (only for the labels)
     int hovered_[2] = {-1, -1};
     int pressed_[2] = {-1, -1};      // key held by each controller
+    bool bar_hot_[2] = {false, false};
+    int move_hand_ = -1;
+    float move_u_ = 0, move_v_ = 0, move_dist_ = 0;
+    bool moved_ = false;             // placed by hand: reopen there
 
     XrCompositionLayerQuad quad_{XR_TYPE_COMPOSITION_LAYER_QUAD};
 };

@@ -272,6 +272,8 @@ void Pointer::release_buttons(const Mouse &mouse) {
 
 bool Pointer::update(XrTime t, const std::vector<PanelPose> &poses, const std::vector<Rect> &regions, float radius,
                      const Mouse &mouse, Menu &menu, Keyboard &keyboard) {
+    const float dt = last_t_ && t > last_t_ ? std::min(float(t - last_t_) * 1e-9f, 0.05f) : 0.0f;
+    last_t_ = t;
     for (auto &h : hands_) h.ray = h.dot = false;
     pad_ = Pad{};
     if (!xr_.focused()) {  // the Steam menu or another app has the controllers
@@ -405,6 +407,7 @@ bool Pointer::update(XrTime t, const std::vector<PanelPose> &poses, const std::v
     if (menu.is_open() && !chord) {
         release_buttons(mouse);
         keyboard.release_all();
+        keyboard.end_move();
         keyboard.hover(0, -1, -1);
         keyboard.hover(1, -1, -1);
         int hovering = -1;
@@ -434,12 +437,35 @@ bool Pointer::update(XrTime t, const std::vector<PanelPose> &poses, const std::v
     }
 
     // The keyboard: both controllers point at it; a pull holds a key until
-    // it's let go (or the ray leaves the keyboard). The laser controller
-    // goes on to the panels when it isn't pointing at the keyboard.
+    // it's let go (or the ray leaves the keyboard), a pull on its bar moves
+    // it until let go. The laser controller goes on to the panels when it
+    // isn't pointing at (or moving) the keyboard.
     bool laser_on_keyboard = false;
+    if (chord) keyboard.end_move();
     if (keyboard.is_open() && !chord) {
         for (int i = 0; i < 2; i++) {
             Hand &h = hands_[i];
+            if (keyboard.moving_hand() == i) {
+                if (!left_now[i]) {
+                    keyboard.end_move();
+                } else {
+                    if (i == laser_) laser_on_keyboard = true;
+                    if (!h.pose_valid) continue;  // holds still until tracking is back
+                    // Stick forward pushes it away, back pulls it in.
+                    float push = 0;
+                    const float m = std::fabs(stick[i].y);
+                    if (m > kStickDeadzone) {
+                        const float k = (m - kStickDeadzone) / (1 - kStickDeadzone);
+                        push = (stick[i].y > 0 ? 1 : -1) * k * k;
+                    }
+                    keyboard.move(h.origin, h.dir, head_, push, dt);
+                    h.ray = h.dot = true;
+                    h.dot_pos = keyboard.grab_point();
+                    h.dot_rot = keyboard.orientation();
+                    h.end = h.dot_pos;
+                    continue;
+                }
+            }
             float u, v, dist;
             if (!h.pose_valid || !keyboard.hit(h.origin, h.dir, u, v, dist)) {
                 keyboard.hover(i, -1, -1);
@@ -457,7 +483,14 @@ bool Pointer::update(XrTime t, const std::vector<PanelPose> &poses, const std::v
             h.dot_rot = keyboard.orientation();
             keyboard.hover(i, u, v);
             if (left_now[i] && !h.left) {
-                if (keyboard.press(i, u, v)) haptic(i);
+                if (keyboard.on_bar(u, v)) {
+                    if (keyboard.moving_hand() < 0) {
+                        keyboard.begin_move(i, u, v, dist);
+                        haptic(i);
+                    }
+                } else if (keyboard.press(i, u, v)) {
+                    haptic(i);
+                }
             } else if (!left_now[i]) {
                 keyboard.release(i);
             }
