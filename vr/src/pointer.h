@@ -15,11 +15,17 @@
 // controller on the PC instead (pad()): sticks, triggers, bumpers, stick
 // clicks, face buttons, d-pad, menu = Start, view = Back. The grips stay here.
 //
+// The on-screen keyboard (keyboard.h): while it's shown, both controllers
+// point and type on it, and the laser controller still drives the mouse when
+// it points at the panels. While the laser is on (or the keyboard is shown),
+// B or Y shows/hides it.
+//
 // Main thread only (input is read once per display frame).
 //
 // Copyright (C) 2026 framewall contributors. GPL-3.0-or-later.
 #pragma once
 
+#include "keyboard.h"
 #include "layout.h"
 #include "menu.h"
 #include "xr.h"
@@ -48,10 +54,10 @@ public:
     // the panels on the cylinder of `radius` and their rectangles in the
     // stream. Returns true when both grips were pressed together (the menu).
     bool update(XrTime t, const std::vector<PanelPose> &poses, const std::vector<Rect> &regions, float radius,
-                const Mouse &mouse, Menu &menu);
+                const Mouse &mouse, Menu &menu, Keyboard &keyboard);
 
     // The Xbox controller as of the last update(): neutral while the laser is
-    // on, the menu is open or the app isn't focused. Buttons use Limelight's
+    // on, the menu or keyboard is open or the app isn't focused. Buttons use Limelight's
     // *_FLAG values; sticks are -32768..32767 with up = +.
     struct Pad {
         int buttons = 0;
@@ -78,6 +84,10 @@ private:
         bool pose_valid = false;
         XrVector3f origin{}, dir{}, end{};  // the ray this frame
         bool ray = false;                    // drawn this frame
+        bool dot = false;                    // where it hits something, drawn this frame
+        XrVector3f dot_pos{};
+        XrQuaternionf dot_rot{0, 0, 0, 1};
+        bool kb_button = false;              // B or Y (keyboard toggle), as of the last frame
     };
 
     bool make_actions(std::string &err);
@@ -104,12 +114,9 @@ private:
     bool held_[2] = {false, false};  // left, right button down on the PC
     bool trigger_down_[2] = {false, false};
     XrVector3f head_{};
-    bool dot_ = false;
-    XrVector3f dot_pos_{};
-    XrQuaternionf dot_rot_{0, 0, 0, 1};
     int last_x_ = -1, last_y_ = -1;
     double scroll_acc_[2] = {0, 0};
 
     Xr::Swapchain dot_img_, ray_img_;
-    XrCompositionLayerQuad ray_layers_[2], dot_layer_{XR_TYPE_COMPOSITION_LAYER_QUAD};
+    XrCompositionLayerQuad ray_layers_[2], dot_layers_[2];
 };

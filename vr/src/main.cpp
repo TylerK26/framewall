@@ -5,7 +5,8 @@
 // (Sunshine) like Moonlight does, reusing Moonlight's pairing, decodes the one
 // wall stream on the headset's hardware decoder and shows each monitor of the
 // wall as its own curved panel (an OpenXR cylinder layer), over a dark void.
-// Mouse and keyboard stay on the PC.
+// The PC's own mouse and keyboard work as usual; the controllers add a
+// laser pointer, an on-screen keyboard and an Xbox controller.
 //
 //   framewall-vr                 stream the default preset (see below)
 //   framewall-vr "APP"           stream this wall preset (app name, or part of one)
@@ -17,7 +18,8 @@
 //
 // Controllers (see pointer.h): a grip toggles the laser on that controller;
 // trigger or bumper = left click, stick click = right click, stick = scroll.
-// Both grips together open the menu (menu.h): passthrough, recenter, panel
+// Both grips together open the menu (menu.h): passthrough, recenter, the
+// on-screen keyboard (keyboard.h; also B or Y while the laser is on), panel
 // size, stream info, quit.
 //
 // Settings: ~/.config/framewall-vr.conf (KEY=VALUE, see framewall-vr.conf.example),
@@ -28,6 +30,7 @@
 // Copyright (C) 2026 framewall contributors. GPL-3.0-or-later.
 #include "audio.h"
 #include "control.h"
+#include "keyboard.h"
 #include "layout.h"
 #include "log.h"
 #include "menu.h"
@@ -305,6 +308,11 @@ int main(int argc, char **argv) {
     if (!pointer.init(err)) { fwlog("pointer: %s", err.c_str()); return 1; }
     Menu menu(xr);
     if (!menu.init(err)) { fwlog("menu: %s", err.c_str()); return 1; }
+    // Keys as Win32 virtual-key codes, flagged like Moonlight sends them.
+    Keyboard keyboard(xr, [](int vk, bool down, int modifiers) {
+        LiSendKeyboardEvent(short(0x8000 | vk), down ? KEY_ACTION_DOWN : KEY_ACTION_UP, char(modifiers));
+    });
+    if (!keyboard.init(err)) { fwlog("keyboard: %s", err.c_str()); return 1; }
     // Absolute positions in the wall stream: Sunshine maps them onto the
     // captured region, so the PC's cursor lands under the laser's dot.
     const Pointer::Mouse mouse{
@@ -466,7 +474,7 @@ int main(int argc, char **argv) {
         XrFrameState fs{XR_TYPE_FRAME_STATE};
         if (XR_FAILED(xrWaitFrame(xr.session, nullptr, &fs))) { usleep(10000); continue; }
         stats.frame(fs);
-        if (pointer.update(fs.predictedDisplayTime, poses, regions, s.place.radius, mouse, menu)) {
+        if (pointer.update(fs.predictedDisplayTime, poses, regions, s.place.radius, mouse, menu, keyboard)) {
             if (menu.is_open()) menu.close();
             else { menu.open(fs.predictedDisplayTime); last_info = 0; }
         }
@@ -496,6 +504,10 @@ int main(int argc, char **argv) {
         case Menu::Action::Recenter:
             xr.recenter(fs.predictedDisplayTime);
             menu.close();
+            break;
+        case Menu::Action::ToggleKeyboard:
+            keyboard.toggle(fs.predictedDisplayTime);
+            menu.close();  // straight to typing
             break;
         case Menu::Action::Smaller:
         case Menu::Action::Bigger: {
@@ -528,9 +540,10 @@ int main(int argc, char **argv) {
             std::snprintf(l3, sizeof l3, "Decoded->wall %.1f ms, missed %llu", stats.last.latency,
                           (unsigned long long)stats.last.missed);
             std::snprintf(l4, sizeof l4, "Network %s, %d Mbps", g_poor ? "POOR (packet loss)" : "ok", sc.bitrate / 1000);
-            menu.set_state(passthrough, s.size, {l1, l2, l3, l4});
+            menu.set_state(passthrough, keyboard.is_open(), s.size, {l1, l2, l3, l4});
         }
         menu.prepare();
+        keyboard.prepare();
         const XrEnvironmentBlendMode blend = passthrough ? XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND : XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
         XrResult r;
         {
@@ -539,6 +552,7 @@ int main(int argc, char **argv) {
             layers.clear();
             if (fs.shouldRender) {
                 renderer.layers(fs.predictedDisplayTime, passthrough, poses, regions, s.place.radius, layers);
+                keyboard.layers(layers);
                 menu.layers(layers);
                 pointer.layers(layers);
             }
@@ -554,6 +568,7 @@ int main(int argc, char **argv) {
     }
 
     fwlog("stopping");
+    keyboard.close();  // no key left down on the PC
     renderer.stop();
     save_edits();
     LiStopConnection();

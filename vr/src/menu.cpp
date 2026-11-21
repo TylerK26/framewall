@@ -11,7 +11,7 @@
 
 namespace {
 
-constexpr int kW = 640, kH = 584;       // pixels
+constexpr int kW = 640, kH = 660;       // pixels
 constexpr float kWidthM = 0.44f;        // m
 constexpr float kDistance = 0.65f;      // m in front of the head
 constexpr float kDrop = 0.12f;          // m below eye level
@@ -47,6 +47,8 @@ bool Menu::init(std::string &err) {
     buttons_ = {{x0, y, w, h, Action::TogglePassthrough}};
     y += step;
     buttons_.push_back({x0, y, w, h, Action::Recenter});
+    y += step;
+    buttons_.push_back({x0, y, w, h, Action::ToggleKeyboard});
     y += step;
     buttons_.push_back({x0, y, 130, h, Action::Smaller});
     buttons_.push_back({x0 + w - 130, y, 130, h, Action::Bigger});
@@ -155,9 +157,11 @@ Menu::Action Menu::take_action() {
     return a;
 }
 
-void Menu::set_state(bool passthrough, float size, const std::vector<std::string> &info) {
-    if (passthrough != passthrough_ || std::fabs(size - size_) > 1e-4f || info != info_) dirty_ = true;
+void Menu::set_state(bool passthrough, bool keyboard, float size, const std::vector<std::string> &info) {
+    if (passthrough != passthrough_ || keyboard != keyboard_ || std::fabs(size - size_) > 1e-4f || info != info_)
+        dirty_ = true;
     passthrough_ = passthrough;
+    keyboard_ = keyboard;
     size_ = size;
     info_ = info;
 }
@@ -196,6 +200,7 @@ void Menu::draw() {
         switch (b.action) {
         case Action::TogglePassthrough: text(passthrough_ ? "Passthrough: ON" : "Passthrough: OFF", b.x, ty, b.w, 3, 235); break;
         case Action::Recenter: text("Recenter panels", b.x, ty, b.w, 3, 235); break;
+        case Action::ToggleKeyboard: text(keyboard_ ? "Hide keyboard" : "Show keyboard", b.x, ty, b.w, 3, 235); break;
         case Action::Smaller: text("-", b.x, ty, b.w, 3, 235); break;
         case Action::Bigger: text("+", b.x, ty, b.w, 3, 235); break;
         case Action::Quit: text(armed ? "Pull again to quit" : "Quit framewall", b.x, ty, b.w, 3, 235); break;

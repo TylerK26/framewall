@@ -271,13 +271,13 @@ void Pointer::release_buttons(const Mouse &mouse) {
 }
 
 bool Pointer::update(XrTime t, const std::vector<PanelPose> &poses, const std::vector<Rect> &regions, float radius,
-                     const Mouse &mouse, Menu &menu) {
-    dot_ = false;
-    for (auto &h : hands_) h.ray = false;
+                     const Mouse &mouse, Menu &menu, Keyboard &keyboard) {
+    for (auto &h : hands_) h.ray = h.dot = false;
     pad_ = Pad{};
     if (!xr_.focused()) {  // the Steam menu or another app has the controllers
         release_buttons(mouse);
-        for (auto &h : hands_) h.grip = h.left = h.right = false, h.grip_down_ms = 0;
+        keyboard.release_all();
+        for (auto &h : hands_) h.grip = h.left = h.right = h.kb_button = false, h.grip_down_ms = 0;
         return false;
     }
     XrActiveActionSet active{set_, XR_NULL_PATH};
@@ -287,7 +287,7 @@ bool Pointer::update(XrTime t, const std::vector<PanelPose> &poses, const std::v
     if (XR_FAILED(xrSyncActions(xr_.session, &sync))) return false;
 
     const uint64_t now = now_ms();
-    bool grip_now[2], left_now[2], right_now[2], bumper_now[2];
+    bool grip_now[2], left_now[2], right_now[2], bumper_now[2], kb_button_now[2];
     float trigger_value[2] = {0, 0};
     int pad_buttons = 0;
     XrVector2f stick[2] = {};
@@ -311,8 +311,12 @@ bool Pointer::update(XrTime t, const std::vector<PanelPose> &poses, const std::v
         const std::pair<XrAction, int> pad_map[] = {{a_, A_FLAG}, {b_, B_FLAG}, {x_, X_FLAG}, {y_, Y_FLAG},
                                                     {up_, UP_FLAG}, {down_, DOWN_FLAG}, {leftd_, LEFT_FLAG},
                                                     {rightd_, RIGHT_FLAG}, {start_, PLAY_FLAG}, {back_, BACK_FLAG}};
+        kb_button_now[i] = false;
         for (const auto &[act, flag] : pad_map)
-            if (boolean(act)) pad_buttons |= flag;
+            if (boolean(act)) {
+                pad_buttons |= flag;
+                if (flag == B_FLAG || flag == Y_FLAG) kb_button_now[i] = true;
+            }
         // Trigger: analog, with hysteresis, so a light pull clicks.
         XrActionStateFloat f{XR_TYPE_ACTION_STATE_FLOAT};
         gi.action = trigger_;
@@ -356,10 +360,24 @@ bool Pointer::update(XrTime t, const std::vector<PanelPose> &poses, const std::v
         }
         h.grip = grip_now[i];
     }
-    if (chord) release_buttons(mouse);
+    if (chord) {
+        release_buttons(mouse);
+        keyboard.release_all();
+    }
 
-    // The Xbox controller, while the laser is off and the menu closed.
-    if (laser_ < 0 && !menu.is_open()) {
+    // B or Y shows/hides the keyboard, while the controllers aren't a gamepad.
+    for (int i = 0; i < 2; i++) {
+        Hand &h = hands_[i];
+        if (kb_button_now[i] && !h.kb_button && !menu.is_open() && (laser_ >= 0 || keyboard.is_open())) {
+            if (!keyboard.is_open()) release_buttons(mouse);
+            keyboard.toggle(t);
+            haptic(i);
+        }
+        h.kb_button = kb_button_now[i];
+    }
+
+    // The Xbox controller, while the laser is off and the menu and keyboard closed.
+    if (laser_ < 0 && !menu.is_open() && !keyboard.is_open()) {
         auto axis = [](float v) { return int16_t(std::lround(std::clamp(v, -1.0f, 1.0f) * 32767)); };
         auto trig = [](float v) { return uint8_t(std::lround(std::clamp(v, 0.0f, 1.0f) * 255)); };
         pad_.buttons = pad_buttons | (bumper_now[0] ? LB_FLAG : 0) | (bumper_now[1] ? RB_FLAG : 0) |
@@ -386,6 +404,9 @@ bool Pointer::update(XrTime t, const std::vector<PanelPose> &poses, const std::v
     // reaches the PC meanwhile.
     if (menu.is_open() && !chord) {
         release_buttons(mouse);
+        keyboard.release_all();
+        keyboard.hover(0, -1, -1);
+        keyboard.hover(1, -1, -1);
         int hovering = -1;
         float hu = -1, hv = -1;
         for (int i = 0; i < 2; i++) {
@@ -403,16 +424,49 @@ bool Pointer::update(XrTime t, const std::vector<PanelPose> &poses, const std::v
         }
         menu.hover(hovering >= 0 ? hu : -1, hv);
         if (hovering >= 0) {
-            dot_ = true;
-            dot_pos_ = menu.point(hu, hv);
-            dot_rot_ = menu.orientation();
+            Hand &h = hands_[hovering];
+            h.dot = true;
+            h.dot_pos = menu.point(hu, hv);
+            h.dot_rot = menu.orientation();
         }
         latch();
         return chord;
     }
 
+    // The keyboard: both controllers point at it; a pull holds a key until
+    // it's let go (or the ray leaves the keyboard). The laser controller
+    // goes on to the panels when it isn't pointing at the keyboard.
+    bool laser_on_keyboard = false;
+    if (keyboard.is_open() && !chord) {
+        for (int i = 0; i < 2; i++) {
+            Hand &h = hands_[i];
+            float u, v, dist;
+            if (!h.pose_valid || !keyboard.hit(h.origin, h.dir, u, v, dist)) {
+                keyboard.hover(i, -1, -1);
+                keyboard.release(i);
+                if (h.pose_valid && i != laser_) {  // a ray to aim with
+                    h.ray = true;
+                    h.end = h.origin + h.dir * kRayLength;
+                }
+                continue;
+            }
+            if (i == laser_) laser_on_keyboard = true;
+            h.ray = h.dot = true;
+            h.end = h.origin + h.dir * dist;
+            h.dot_pos = keyboard.point(u, v);
+            h.dot_rot = keyboard.orientation();
+            keyboard.hover(i, u, v);
+            if (left_now[i] && !h.left) {
+                if (keyboard.press(i, u, v)) haptic(i);
+            } else if (!left_now[i]) {
+                keyboard.release(i);
+            }
+        }
+    }
+
     if (laser_ < 0) { latch(); return chord; }
     Hand &h = hands_[laser_];
+    if (laser_on_keyboard) { release_buttons(mouse); latch(); return chord; }
     if (!h.pose_valid) { release_buttons(mouse); latch(); return chord; }
 
     // The ray, in the seated space, against the panels' cylinder (x² + z² = r²).
@@ -441,9 +495,9 @@ bool Pointer::update(XrTime t, const std::vector<PanelPose> &poses, const std::v
                 v = (poses[i].y + poses[i].height_m / 2 - p.y) / poses[i].height_m;
                 h.end = p;
                 // The dot: on the panel, a few mm towards you, facing the axis.
-                dot_ = true;
-                dot_pos_ = p + XrVector3f{-std::sin(ang), 0, std::cos(ang)} * 0.005f;
-                dot_rot_ = {0, std::sin(-ang / 2), 0, std::cos(-ang / 2)};
+                h.dot = true;
+                h.dot_pos = p + XrVector3f{-std::sin(ang), 0, std::cos(ang)} * 0.005f;
+                h.dot_rot = {0, std::sin(-ang / 2), 0, std::cos(-ang / 2)};
                 break;
             }
         }
@@ -517,16 +571,19 @@ void Pointer::layers(std::vector<XrCompositionLayerBaseHeader *> &out) {
         q.size = {kRayWidth, len};
         out.push_back(reinterpret_cast<XrCompositionLayerBaseHeader *>(&q));
     }
-    if (dot_) {
-        dot_layer_ = {XR_TYPE_COMPOSITION_LAYER_QUAD};
-        dot_layer_.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
-        dot_layer_.space = xr_.space;
-        dot_layer_.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
-        dot_layer_.subImage.swapchain = dot_img_.handle;
-        dot_layer_.subImage.imageRect = {{0, 0}, {dot_img_.width, dot_img_.height}};
-        dot_layer_.pose.orientation = dot_rot_;
-        dot_layer_.pose.position = dot_pos_;
-        dot_layer_.size = {kDotSize, kDotSize};
-        out.push_back(reinterpret_cast<XrCompositionLayerBaseHeader *>(&dot_layer_));
+    for (int i = 0; i < 2; i++) {
+        const Hand &h = hands_[i];
+        if (!h.dot) continue;
+        XrCompositionLayerQuad &q = dot_layers_[i];
+        q = {XR_TYPE_COMPOSITION_LAYER_QUAD};
+        q.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+        q.space = xr_.space;
+        q.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+        q.subImage.swapchain = dot_img_.handle;
+        q.subImage.imageRect = {{0, 0}, {dot_img_.width, dot_img_.height}};
+        q.pose.orientation = h.dot_rot;
+        q.pose.position = h.dot_pos;
+        q.size = {kDotSize, kDotSize};
+        out.push_back(reinterpret_cast<XrCompositionLayerBaseHeader *>(&q));
     }
 }

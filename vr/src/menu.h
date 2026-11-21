@@ -1,7 +1,7 @@
 // The in-headset menu, opened and closed with both grips: a small panel in
 // front of you, used with the lasers (trigger or bumper picks).
 //
-//   Passthrough on/off · Recenter panels · Panels smaller / bigger ·
+//   Passthrough on/off · Recenter panels · Keyboard show/hide · Panels smaller / bigger ·
 //   Quit framewall (pull twice) · Close · stream info
 //
 // Drawn with SDL's software renderer and built-in 8x8 font into an image,
@@ -21,7 +21,7 @@ struct SDL_Renderer;
 
 class Menu {
 public:
-    enum class Action { None, TogglePassthrough, Recenter, Smaller, Bigger, Quit, Close };
+    enum class Action { None, TogglePassthrough, Recenter, ToggleKeyboard, Smaller, Bigger, Quit, Close };
 
     explicit Menu(Xr &xr) : xr_(xr) {}
     ~Menu();
@@ -43,7 +43,7 @@ public:
     Action take_action();
 
     // What the rows show.
-    void set_state(bool passthrough, float size, const std::vector<std::string> &info);
+    void set_state(bool passthrough, bool keyboard, float size, const std::vector<std::string> &info);
 
     // Redraws and uploads the image if something changed. Before the frame's
     // begin/end (it takes xr.queue_mu).
@@ -67,7 +67,7 @@ private:
     uint64_t quit_armed_ms_ = 0;
     Action pending_ = Action::None;
 
-    bool passthrough_ = false;
+    bool passthrough_ = false, keyboard_ = false;
     float size_ = 1;
     std::vector<std::string> info_;
 

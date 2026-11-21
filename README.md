@@ -17,9 +17,9 @@ Built for the **Steam Frame**, with a KDE Plasma laptop or desktop as the host.
   the stream does, and each frame is on the panels ~1.5 ms after it's decoded.
 - **Your room or a dark void** around the panels (passthrough), switchable
   from an in-headset menu.
-- **Controllers:** a laser pointer drives the PC's mouse, or the controllers
-  act as an Xbox controller (with rumble). The PC's own mouse and keyboard
-  keep working too.
+- **Controllers:** a laser pointer drives the PC's mouse, an on-screen
+  keyboard types on the PC, or the controllers act as an Xbox controller
+  (with rumble). The PC's own mouse and keyboard keep working too.
 
 ## How it works
 
@@ -142,13 +142,23 @@ It picks the host's preset matching the headset's refresh rate.
   | Thumbstick click | Right click |
   | Thumbstick | Scroll |
   | Both grips together | Open / close the menu |
+  | B or Y (while the laser is on or the keyboard is shown) | Show / hide the on-screen keyboard |
 
   With the laser off and the menu closed, the controllers are an **Xbox
   controller** on the PC (sticks, triggers, bumpers, stick clicks, A/B/X/Y,
   d-pad, menu = Start, view = Back), with rumble. The grips never reach the
-  PC. While the laser is on or the menu is open, the gamepad is released.
+  PC. While the laser is on, or the menu or keyboard is open, the gamepad is
+  released.
+- **On-screen keyboard** (menu → Show keyboard, or B/Y with the laser on): a
+  US keyboard floating low in front of you. Both controllers point at it; a
+  trigger or bumper pull presses the key under that controller's dot and
+  holds it until you let go, so the PC repeats it and you can type with both
+  hands. Shift, Ctrl, Alt and Meta are sticky: tap once for the next key
+  only, tap twice quickly to lock one (tap again to release it), e.g. lock
+  Alt and tap Tab to switch windows. The laser controller still drives the
+  mouse when it points at the panels instead. Hide closes it.
 - **Menu** (both grips): passthrough on/off (remembered), recenter the panels
-  in front of you, all panels smaller / bigger, quit (pull twice), and the
+  in front of you, show / hide the keyboard, all panels smaller / bigger, quit (pull twice), and the
   stream's frame rate, latency and connection. While it's open, nothing
   reaches the PC.
 - **Passthrough** uses OpenXR's own blend mode (`ALPHA_BLEND`): SteamVR shows
