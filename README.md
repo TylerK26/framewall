@@ -65,6 +65,26 @@ A fast link matters: the Steam Frame's 6 GHz wireless adapter works well.
 
 ### 1. Host: build the patched Sunshine
 
+Install the build dependencies first (Arch / CachyOS package names; for other
+distros see [Sunshine's build docs](https://docs.lizardbyte.dev/projects/sunshine/latest/md_docs_2building.html)):
+
+```sh
+sudo pacman -S --needed base-devel cmake ninja git boost nlohmann-json \
+    nodejs npm shaderc python-jinja python-setuptools libva libdrm \
+    libpipewire libpulse opus miniupnpc libcap libevdev libnotify \
+    libayatana-appindicator numactl wayland libx11 libxcb libxfixes \
+    libxrandr libxtst mesa vulkan-icd-loader qt6-base qt6-svg curl \
+    openssl icu avahi
+```
+
+- **Boost 1.89 or newer, with its development files** (`boost`, not just
+  `boost-libs`). Without it, Sunshine tries to build its own Boost, and that
+  fails with current CMake (a `source_group` error in Boost.Locale).
+- **Node.js 20.19+ or 22.12+** with npm, for Sunshine's web UI.
+- For `--cuda` (NVENC on NVIDIA GPUs), also `cuda`.
+
+Then build:
+
 ```sh
 git clone https://github.com/TylerK26/framewall.git
 cd framewall

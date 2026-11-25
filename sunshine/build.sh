@@ -35,6 +35,18 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Sunshine needs Boost >= 1.89 with its CMake files (Arch/CachyOS: the `boost`
+# package, not just `boost-libs`). Without it, Sunshine falls back to building
+# Boost 1.89 from source, which fails to configure with CMake 4.x
+# (Boost.Locale: "source_group ... is not a prefix of file").
+boost_cfg=$(ls -d /usr/lib/cmake/Boost-* /usr/lib64/cmake/Boost-* /usr/lib/*/cmake/Boost-* \
+    /usr/local/lib/cmake/Boost-* 2>/dev/null | sed 's/.*Boost-//' | sort -V | tail -1 || true)
+if [[ -z "$boost_cfg" ]] || [[ "$(printf '%s\n' 1.89.0 "$boost_cfg" | sort -V | head -1)" != 1.89.0 ]]; then
+    echo "Boost >= 1.89 development files not found${boost_cfg:+ (found $boost_cfg)}." >&2
+    echo "Install them first, e.g. on Arch/CachyOS: sudo pacman -S boost" >&2
+    exit 1
+fi
+
 if [[ ! -d "$src/.git" ]]; then
     git clone "$SUNSHINE_REPO" "$src"
 fi
